@@ -1,0 +1,80 @@
+# Pushing a tag like v0.1.0 builds the four archives, signs SHA256SUMS with
+# the release key and publishes a GitHub release with install.sh beside them.
+#
+# Needs one repository secret, RELEASE_SIGNING_KEY: the OpenSSH private key
+# whose public half is PUBKEY in install.sh.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Tag matches the chess-tui version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 |
+            jq -r '.packages[] | select(.name == "chess-tui") | .version')
+          [ "v$version" = "$GITHUB_REF_NAME" ] ||
+            { echo "tag $GITHUB_REF_NAME but chess-tui is $version"; exit 1; }
+      - run: cargo test --locked --workspace --lib --bins --tests
+
+  build:
+    needs: check
+    strategy:
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-latest }
+          - { target: x86_64-apple-darwin, os: macos-latest }
+          - { target: aarch64-apple-darwin, os: macos-latest }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - run: scripts/package.sh ${{ matrix.target }}
+      - uses: actions/upload-artifact@v5
+        with:
+          name: ${{ matrix.target }}
+          path: dist/chess-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v6
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Sign
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          cd dist
+          sha256sum chess-*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+          key=$(mktemp)
+          printf '%s\n' "$RELEASE_SIGNING_KEY" > "$key"
+          namespace=$(sed -n 's/^NAMESPACE="\(.*\)"$/\1/p' ../install.sh)
+          ssh-keygen -Y sign -q -f "$key" -n "$namespace" SHA256SUMS
+          rm -f "$key"
+      - name: Install with install.sh from the signed files
+        run: |
+          CHESS_DOWNLOAD_URL="file://$PWD/dist" CHESS_INSTALL_DIR="$RUNNER_TEMP/bin" sh install.sh
+          "$RUNNER_TEMP/bin/chess-tui" --version
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp install.sh dist/
+          gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes

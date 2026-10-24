@@ -16,7 +16,8 @@ usage: chess-tui [--server HOST[:PORT]] [--relay HOST[:PORT]] [--force-relay]
   --server   rendezvous server for peer-to-peer games: $CHESS_RENDEZVOUS,
              or 127.0.0.1; port 7777
   --relay    relay: $CHESS_RELAY, or the server's host on port 443
-  --force-relay  skip the direct connection (both players must pass it)";
+  --force-relay  skip the direct connection (both players must pass it)
+  --version  print the version";
 
 fn main() -> std::io::Result<()> {
     let mut servers = Servers::from_env();
@@ -26,6 +27,14 @@ fn main() -> std::io::Result<()> {
             "--server" => servers.rendezvous = args.next().unwrap_or_default(),
             "--relay" => servers.relay = args.next(),
             "--force-relay" => servers.force_relay = true,
+            "--version" | "-V" => {
+                println!("chess-tui {}", env!("CARGO_PKG_VERSION"));
+                return Ok(());
+            }
+            "--help" | "-h" => {
+                println!("{USAGE}");
+                return Ok(());
+            }
             _ => {
                 eprintln!("{USAGE}");
                 std::process::exit(2);

@@ -23,7 +23,7 @@ game. Written in Rust, with pixel-art pieces, chess clocks and a retro look.
 
 ## Install
 
-### Today: build from source
+### Build from source
 
 You need [Rust](https://rustup.rs) (stable) on macOS or Linux. Windows is
 untested. The repository is private for now, so cloning needs access to it.
@@ -43,33 +43,44 @@ cargo install --path crates/chess-net     # chess-rendezvous, chess-relay, chess
 
 Or run without installing: `cargo run --release -p chess-tui`.
 
-### Planned: one command
-
-The goal is a single command that installs a signed binary:
+### Soon: one command
 
 ```sh
-curl -fsSL https://<domain>/install.sh | sh
+curl -fsSL https://chess.thesudhanshu.dev/install.sh | sh
 ```
 
-This is the next milestone and isn't built yet. The plan:
+This works once the repository is public, a release is tagged and the domain
+serves the script. It runs on Linux (x86_64 and aarch64, any distribution:
+the binaries are static) and macOS (Intel and Apple silicon). What it does:
 
-1. **Release builds.** Tagging a release makes CI build a binary per
-   platform: Linux x86_64 and aarch64 (static, with musl, so it runs on any
-   distribution) and macOS x86_64 and aarch64. Windows comes later.
-2. **Signing.** CI signs every archive and a `SHA256SUMS` file with an
-   ed25519 key. The public key is written into `install.sh`, which refuses
-   anything whose signature does not check out. The script itself is
-   protected by HTTPS; the signature protects against a tampered download.
-3. **`install.sh`.** Detects the OS and CPU with `uname`, downloads the
-   matching archive, checks its signature, installs to `~/.local/bin` (no
-   sudo) and says so if that folder is not on your `PATH`.
-4. **Public servers.** A rendezvous server and relay on a public host, built
-   in as the default, so online play works with no setup.
-5. **Later, maybe:** a Homebrew tap, and `cargo install` from crates.io.
+- Detects the OS and CPU with `uname` (and spots a shell running under
+  Rosetta on Apple silicon).
+- Downloads `SHA256SUMS` and checks its ed25519 signature against the release
+  key written into the script, using `ssh-keygen -Y verify` (OpenSSH 8.1 or
+  newer, already on macOS and most Linux systems). Then it checks the
+  archive's SHA-256 against that signed list. Anything that fails is refused.
+  HTTPS protects the script itself; the signature protects the download.
+- Installs `chess-tui` to `~/.local/bin` (no sudo) and tells you if that
+  folder is not on your `PATH`. Running it again updates.
 
-The code lives on GitHub (private for now), so releases would go on GitHub
-Releases once it is public. Still to decide: the domain and host for the
-servers, and the first platforms.
+Settings: `CHESS_VERSION=v0.1.0` installs a given release,
+`CHESS_INSTALL_DIR` picks another folder. For example:
+
+```sh
+curl -fsSL https://chess.thesudhanshu.dev/install.sh | CHESS_VERSION=v0.1.0 sh
+```
+
+Each release archive also holds `chess-rendezvous` and `chess-relay`, for
+running your own servers. Still to come: public servers built in as the
+default, so online play works with no setup; later maybe a Homebrew tap.
+
+**Making a release** (maintainers): set the `chess-tui` version in its
+`Cargo.toml`, then push a matching tag (`git tag v0.1.0 && git push origin
+v0.1.0`). `.github/workflows/release.yml` tests, builds the four archives
+with `scripts/package.sh`, signs `SHA256SUMS` with the `RELEASE_SIGNING_KEY`
+secret, installs from the result with `install.sh` as a check, and publishes
+a GitHub release with `install.sh` attached. `scripts/package.sh TARGET`
+also builds an archive locally (a Mac can build the Linux ones too).
 
 ## Play
 
