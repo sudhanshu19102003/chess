@@ -9,7 +9,7 @@ use chess_net::Via;
 use chess_verify::Signal;
 use chess_net::connect::Stage;
 
-use crate::app::{self, App, Lobby, Mode, MoveRecord, Screen};
+use crate::app::{self, App, Lobby, Mode, MoveRecord, Pick, Screen};
 use crate::canvas::{Canvas, Rgb, rgb};
 use crate::clock;
 use crate::layout::{self, BoardGeom, Cells};
@@ -178,9 +178,9 @@ fn time_spans(app: &App) -> Spans {
     ]
 }
 
-/// Rows of the time control on the home screen and in the lobby.
+/// Row of the time control on the home screen and in the lobby, below the
+/// three buttons.
 const HOME_TIME_ROW: i32 = 20;
-const LOBBY_TIME_ROW: i32 = 17;
 /// Width of a menu button, and the row of the first one.
 const BUTTON_W: i32 = 30;
 const BUTTONS_ROW: i32 = 8;
@@ -196,8 +196,8 @@ pub enum HomeHit {
     Mode(Mode),
     /// The time control: true for the next one, false for the previous.
     Time(bool),
-    Host,
-    Join,
+    /// A lobby button.
+    Pick(Pick),
     /// The game code or the copy button.
     Copy,
 }
@@ -219,17 +219,10 @@ pub fn home_hit(app: &App, w: i32, h: i32, col: i32, row: i32) -> Option<HomeHit
             .find(|&i| button(i as i32))
             .map(|i| HomeHit::Mode(Mode::ALL[i]))
             .or_else(|| time(y + HOME_TIME_ROW)),
-        (Screen::Lobby, Lobby::Choose { join }) => {
-            if button(0) {
-                Some(HomeHit::Host)
-            } else if button(1) {
-                Some(HomeHit::Join)
-            } else if !join {
-                time(y + LOBBY_TIME_ROW)
-            } else {
-                None
-            }
-        }
+        (Screen::Lobby, Lobby::Choose { pick }) => (0..Pick::ALL.len())
+            .find(|&i| button(i as i32))
+            .map(|i| HomeHit::Pick(Pick::ALL[i]))
+            .or_else(|| if *pick == Pick::Join { None } else { time(y + HOME_TIME_ROW) }),
         (Screen::Lobby, Lobby::Connecting { code: Some(_), .. }) => {
             let on_box = inside(x + CODE_BOX.0, y + CODE_ROW, CODE_BOX.1, 3);
             (on_box || inside(x + COPY_BUTTON.0, y + CODE_ROW, COPY_BUTTON.1, 3)).then_some(HomeHit::Copy)
@@ -346,14 +339,21 @@ fn wrap(s: &str, w: usize) -> Vec<String> {
 fn lobby(cv: &mut Canvas, out: &mut Vec<Text>, app: &App, x: i32, y: i32, now: Instant, t: f32) {
     let pulse = 0.75 + 0.25 * (t * 3.0).sin();
     let help = match &app.lobby {
-        Lobby::Choose { join } => {
-            button(cv, out, x, y + BUTTONS_ROW, "HOST A GAME", !join, true, pulse);
-            button(cv, out, x, y + BUTTONS_ROW + 4, "JOIN WITH A CODE", *join, true, pulse);
-            if *join {
-                centred(out, x, HOME_W, y + LOBBY_TIME_ROW, "the host chooses the time", TEXT_FAINT);
-            } else {
-                centred_spans(out, x, HOME_W, y + LOBBY_TIME_ROW, &time_spans(app));
+        Lobby::Choose { pick } => {
+            for (i, p) in Pick::ALL.into_iter().enumerate() {
+                button(cv, out, x, y + BUTTONS_ROW + 4 * i as i32, p.name(), p == *pick, true, pulse);
             }
+            if *pick == Pick::Join {
+                centred(out, x, HOME_W, y + HOME_TIME_ROW, "the host chooses the time", TEXT_FAINT);
+            } else {
+                centred_spans(out, x, HOME_W, y + HOME_TIME_ROW, &time_spans(app));
+            }
+            let hint = match pick {
+                Pick::Host => "anywhere, through the game server",
+                Pick::HostLan => "same Wi-Fi or hotspot, no server needed",
+                Pick::Join => "with the code on the host's screen",
+            };
+            centred(out, x, HOME_W, y + 22, hint, TEXT_DIM);
             keys(&[("↑↓", "choose"), ("←→", "time"), ("ENTER", "go"), ("ESC", "back")])
         }
         Lobby::Code { input, error } => {
@@ -393,6 +393,7 @@ fn lobby(cv: &mut Canvas, out: &mut Vec<Text>, app: &App, x: i32, y: i32, now: I
             }
             let what = match stage {
                 Stage::Server => "contacting the server",
+                Stage::Searching if app.lobby.pick() == Pick::HostLan => "getting ready",
                 Stage::Searching => "looking on this network",
                 Stage::Code(_) => "waiting for the other player",
                 Stage::Punching => "connecting directly",
@@ -401,7 +402,8 @@ fn lobby(cv: &mut Canvas, out: &mut Vec<Text>, app: &App, x: i32, y: i32, now: I
             };
             let spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'][(t * 10.0) as usize % 10];
             centred(out, x, HOME_W, y + 17, &format!("{spinner} {what}…"), AMBER);
-            centred(out, x, HOME_W, y + 19, &format!("server {}", app.server), TEXT_FAINT);
+            let place = if app.lobby.lan() { "on this network, no server".to_string() } else { format!("server {}", app.server) };
+            centred(out, x, HOME_W, y + 19, &place, TEXT_FAINT);
             if code.is_some() { keys(&[("C", "copy"), ("ESC", "cancel")]) } else { keys(&[("ESC", "cancel")]) }
         }
         Lobby::Failed { failure, .. } => {
@@ -459,7 +461,12 @@ fn online(cv: &mut Canvas, out: &mut Vec<Text>, app: &App, x: i32, y: i32, w: i3
     let alarm = o.dropped.is_some();
     bevel_box(cv, x, y, w, h, alarm.then_some(ALARM_BOTTOM));
     out.push(Text::new(x + 2, y + 1, "ONLINE", AMBER).bold());
-    let link = format!("{}  {} ms", if o.path.via == Via::Relay { "relay" } else { "direct" }, o.rtt.as_millis());
+    let via = match o.path.via {
+        Via::Relay => "relay",
+        Via::Lan => "lan",
+        _ => "direct",
+    };
+    let link = format!("{via}  {} ms", o.rtt.as_millis());
     out.push(Text::new(x + w - 3 - link.chars().count() as i32, y + 1, link, TEXT_DIM));
     out.push(Text::new(x + 2, y + 2, format!("you play {}", o.me().name()), TEXT));
 

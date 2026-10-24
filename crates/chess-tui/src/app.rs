@@ -68,7 +68,7 @@ pub enum Screen {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Lobby {
     /// Host or join. The host's time control is the one played.
-    Choose { join: bool },
+    Choose { pick: Pick },
     /// Typing the code to join; `error` once Enter found it is not a code.
     Code { input: String, error: bool },
     /// Waiting on the network; `code` is the host's, once the server gave it.
@@ -76,13 +76,63 @@ pub enum Lobby {
     Failed { request: Request, failure: Failure },
 }
 
-impl Lobby {
-    pub fn hosting(&self) -> bool {
+/// The lobby's buttons, top to bottom.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pick {
+    /// Through the rendezvous server.
+    Host,
+    /// On the local network, with no server.
+    HostLan,
+    Join,
+}
+
+impl Pick {
+    pub const ALL: [Pick; 3] = [Pick::Host, Pick::HostLan, Pick::Join];
+
+    pub fn name(self) -> &'static str {
         match self {
-            Lobby::Choose { join } => !join,
-            Lobby::Code { .. } => false,
-            Lobby::Connecting { request, .. } | Lobby::Failed { request, .. } => matches!(request, Request::Host(_)),
+            Pick::Host => "HOST ONLINE",
+            Pick::HostLan => "HOST ON THIS NETWORK",
+            Pick::Join => "JOIN WITH A CODE",
         }
+    }
+
+    /// The button `by` places further down, wrapping round.
+    fn step(self, by: usize) -> Pick {
+        let at = Pick::ALL.iter().position(|&p| p == self).unwrap_or(0);
+        Pick::ALL[(at + by) % Pick::ALL.len()]
+    }
+}
+
+impl Lobby {
+    /// The button that led here.
+    pub fn pick(&self) -> Pick {
+        match self {
+            Lobby::Choose { pick } => *pick,
+            Lobby::Code { .. } => Pick::Join,
+            Lobby::Connecting { request, .. } | Lobby::Failed { request, .. } => match request {
+                Request::Host(_) => Pick::Host,
+                Request::HostLan(_) => Pick::HostLan,
+                _ => Pick::Join,
+            },
+        }
+    }
+
+    /// Whether the game is being looked for on the local network.
+    pub fn lan(&self) -> bool {
+        match self {
+            Lobby::Connecting { request, .. } | Lobby::Failed { request, .. } => on_lan(request),
+            _ => false,
+        }
+    }
+}
+
+/// Whether `request` looks for the game on the local network.
+fn on_lan(request: &Request) -> bool {
+    match request {
+        Request::HostLan(_) => true,
+        Request::Join(code) => chess_net::code::parse_lan_code(code).is_some(),
+        _ => false,
     }
 }
 
@@ -224,7 +274,7 @@ impl App {
             hires: false,
             size: layout::needed(),
             play_anyway: false,
-            lobby: Lobby::Choose { join: false },
+            lobby: Lobby::Choose { pick: Pick::Host },
             online: None,
             requests: Vec::new(),
             server: String::new(),
@@ -558,7 +608,7 @@ impl App {
             KeyCode::Left | KeyCode::Char('h') => self.clock = Clock::new((self.clock.preset + presets - 1) % presets),
             KeyCode::Enter | KeyCode::Char(' ') if self.mode == Mode::PeerToPeer => {
                 self.screen = Screen::Lobby;
-                self.lobby = Lobby::Choose { join: false };
+                self.lobby = Lobby::Choose { pick: Pick::Host };
             }
             KeyCode::Enter | KeyCode::Char(' ') if self.mode.available() => self.begin(now),
             KeyCode::Enter | KeyCode::Char(' ') => self.notice = Some(now),
@@ -574,15 +624,17 @@ impl App {
     fn on_lobby_key(&mut self, code: KeyCode) {
         let presets = clock::PRESETS.len();
         match (&mut self.lobby, code) {
-            (Lobby::Choose { join }, KeyCode::Up | KeyCode::Down | KeyCode::Char('k' | 'j') | KeyCode::Tab) => *join = !*join,
+            (Lobby::Choose { pick }, KeyCode::Up | KeyCode::Char('k')) => *pick = pick.step(Pick::ALL.len() - 1),
+            (Lobby::Choose { pick }, KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab) => *pick = pick.step(1),
             (Lobby::Choose { .. }, KeyCode::Right | KeyCode::Char('l' | 't')) => {
                 self.clock = Clock::new((self.clock.preset + 1) % presets);
             }
             (Lobby::Choose { .. }, KeyCode::Left | KeyCode::Char('h')) => {
                 self.clock = Clock::new((self.clock.preset + presets - 1) % presets);
             }
-            (Lobby::Choose { join: true }, KeyCode::Enter) => self.lobby = Lobby::Code { input: String::new(), error: false },
-            (Lobby::Choose { join: false }, KeyCode::Enter) => self.connect(Request::Host(self.clock.offer())),
+            (Lobby::Choose { pick: Pick::Join }, KeyCode::Enter) => self.lobby = Lobby::Code { input: String::new(), error: false },
+            (Lobby::Choose { pick: Pick::Host }, KeyCode::Enter) => self.connect(Request::Host(self.clock.offer())),
+            (Lobby::Choose { pick: Pick::HostLan }, KeyCode::Enter) => self.connect(Request::HostLan(self.clock.offer())),
             (Lobby::Choose { .. }, KeyCode::Esc) => self.screen = Screen::Home,
             (Lobby::Code { input, error }, KeyCode::Char(c)) if input.len() < 40 => {
                 if c.is_ascii_alphanumeric() || c == '-' {
@@ -597,24 +649,24 @@ impl App {
                 *error = false;
             }
             (Lobby::Code { input, error }, KeyCode::Enter) => {
-                if chess_net::code::parse_code(input).is_some() {
+                if chess_net::code::parse_code(input).is_some() || chess_net::code::parse_lan_code(input).is_some() {
                     let request = Request::Join(input.clone());
                     self.connect(request);
                 } else {
                     *error = true;
                 }
             }
-            (Lobby::Code { .. }, KeyCode::Esc) => self.lobby = Lobby::Choose { join: true },
+            (Lobby::Code { .. }, KeyCode::Esc) => self.lobby = Lobby::Choose { pick: Pick::Join },
             (Lobby::Connecting { code: Some(_), .. }, KeyCode::Char('c')) => self.copy_code(),
             (Lobby::Connecting { .. }, KeyCode::Esc) => {
                 self.requests.push(Request::Hangup);
-                self.lobby = Lobby::Choose { join: !self.lobby.hosting() };
+                self.lobby = Lobby::Choose { pick: self.lobby.pick() };
             }
             (Lobby::Failed { request, .. }, KeyCode::Enter) => {
                 let request = request.clone();
                 self.connect(request);
             }
-            (Lobby::Failed { .. }, KeyCode::Esc) => self.lobby = Lobby::Choose { join: !self.lobby.hosting() },
+            (Lobby::Failed { .. }, KeyCode::Esc) => self.lobby = Lobby::Choose { pick: self.lobby.pick() },
             _ => {}
         }
     }
@@ -622,7 +674,8 @@ impl App {
     /// Asks the network to host or join.
     fn connect(&mut self, request: Request) {
         self.requests.push(request.clone());
-        self.lobby = Lobby::Connecting { request, stage: Stage::Server, code: None };
+        let stage = if on_lan(&request) { Stage::Searching } else { Stage::Server };
+        self.lobby = Lobby::Connecting { request, stage, code: None };
     }
 
     /// Something from the network.
@@ -999,8 +1052,8 @@ impl App {
                     _ => self.on_home_key(code, now),
                 }
             }
-            HomeHit::Host | HomeHit::Join => {
-                self.lobby = Lobby::Choose { join: hit == HomeHit::Join };
+            HomeHit::Pick(pick) => {
+                self.lobby = Lobby::Choose { pick };
                 self.on_lobby_key(KeyCode::Enter);
             }
             HomeHit::Copy => self.copy_code(),

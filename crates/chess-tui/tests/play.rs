@@ -296,8 +296,12 @@ mod mouse {
         mouse(&mut app, MouseEventKind::Down(MouseButton::Left), at);
         assert_eq!(app.mode, Mode::PeerToPeer);
         assert_eq!(app.screen, Screen::Lobby);
-        // Then the second lobby button: join.
+        // Then the second lobby button: host on this network.
         mouse(&mut app, MouseEventKind::Down(MouseButton::Left), at);
+        assert!(app.lobby.lan());
+        // Back, and the third: join.
+        app.on_key(KeyCode::Esc.into(), Instant::now());
+        mouse(&mut app, MouseEventKind::Down(MouseButton::Left), (at.0, at.1 + 4));
         assert!(matches!(app.lobby, Lobby::Code { .. }));
     }
 }
