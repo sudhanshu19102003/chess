@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use chess_core::{Color, Move, Position, parse_square};
 use chess_net::link::Event;
 use chess_net::{Path, Via};
-use chess_tui::app::{App, COUNTDOWN, Lobby, Mode, Screen};
+use chess_tui::app::{App, COUNTDOWN, Lobby, Mode, Pick, Screen};
 use chess_tui::net::{Failure, NetEvent, Request};
 use chess_tui::online::LagQuota;
 use chess_verify::{GameId, Hash, MoveMsg, Session, SigningKey, TimeControl};
@@ -292,11 +292,13 @@ fn the_lobby_hosts_and_joins() {
     // Esc hangs up.
     press(&mut app, KeyCode::Esc);
     assert_eq!(app.requests.last(), Some(&Request::Hangup));
-    assert_eq!(app.lobby, Lobby::Choose { join: false });
+    assert_eq!(app.lobby, Lobby::Choose { pick: Pick::Host });
 
-    // Join: typing a code with a q in it does not quit.
+    // Join (the third button, or one up from the first): typing a code with
+    // a q in it does not quit.
     app.requests.clear();
-    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Up);
+    assert_eq!(app.lobby, Lobby::Choose { pick: Pick::Join });
     press(&mut app, KeyCode::Enter);
     for c in "7 Quartz-quill".chars() {
         press(&mut app, KeyCode::Char(c));
@@ -319,6 +321,34 @@ fn the_lobby_hosts_and_joins() {
     press(&mut app, KeyCode::Enter);
     assert_eq!(app.lobby, Lobby::Code { input: "hello".into(), error: true });
     assert!(app.requests.is_empty());
+}
+
+#[test]
+fn the_lobby_hosts_and_joins_on_the_local_network() {
+    let now = Instant::now();
+    let press = |app: &mut App, code: KeyCode| app.on_key(KeyEvent::from(code), now);
+    let mut app = App::new(now);
+    app.screen = Screen::Lobby;
+    // The second button hosts with no server.
+    press(&mut app, KeyCode::Down);
+    assert_eq!(app.lobby, Lobby::Choose { pick: Pick::HostLan });
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.requests, [Request::HostLan(app.clock.offer())]);
+    assert!(app.lobby.lan());
+    // Esc comes back to the same button.
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.lobby, Lobby::Choose { pick: Pick::HostLan });
+
+    // Joining takes a lan- code like any other, and knows it is local.
+    app.requests.clear();
+    app.lobby = Lobby::Code { input: String::new(), error: false };
+    for c in "LAN 42 comet pilot".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.requests, [Request::Join("lan-42-comet-pilot".into())]);
+    assert!(app.lobby.lan());
+    assert_eq!(app.lobby.pick(), Pick::Join);
 }
 
 #[test]

@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use chess_core::{Game, Position};
 use chess_tui::{
-    app::{App, Lobby, Mode, Promotion, Screen},
+    app::{App, Lobby, Mode, Pick, Promotion, Screen},
     net::{Failure, NetEvent, Request},
     octant,
     render::Renderer,
@@ -68,7 +68,7 @@ fn main() {
         }
         "lobby" => {
             app.screen = Screen::Lobby;
-            app.lobby = Lobby::Choose { join: false };
+            app.lobby = Lobby::Choose { pick: Pick::HostLan };
         }
         "code" => {
             app.screen = Screen::Lobby;
@@ -79,6 +79,11 @@ fn main() {
             app.server = "127.0.0.1".into();
             let stage = chess_net::connect::Stage::Code("7-comet-pilot".into());
             app.lobby = Lobby::Connecting { request: Request::Host(app.clock.offer()), stage, code: Some("7-comet-pilot".into()) };
+        }
+        "lan" => {
+            app.screen = Screen::Lobby;
+            let stage = chess_net::connect::Stage::Code("lan-42-comet-pilot".into());
+            app.lobby = Lobby::Connecting { request: Request::HostLan(app.clock.offer()), stage, code: Some("lan-42-comet-pilot".into()) };
         }
         "failed" => {
             app.screen = Screen::Lobby;

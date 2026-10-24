@@ -19,6 +19,8 @@ use tokio::task::JoinHandle;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Request {
     Host(TimeControl),
+    /// Host on the local network, with no server.
+    HostLan(TimeControl),
     Join(String),
     /// A signed message for the opponent.
     Send(Vec<u8>),
@@ -99,6 +101,7 @@ impl Net {
         let start = match request {
             // Colours by coin flip until the lobby offers a choice.
             Request::Host(tc) => Start::Host(Offer { time_control: tc, colour: None }),
+            Request::HostLan(tc) => Start::HostLan(Offer { time_control: tc, colour: None }),
             Request::Join(code) => Start::Join(code),
             Request::Send(bytes) => {
                 if let Some(call) = &self.call {

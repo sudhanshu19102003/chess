@@ -61,6 +61,19 @@ pub fn parse_code(code: &str) -> Option<(u16, String)> {
     (count == 2).then(|| (nameplate, words.to_string()))
 }
 
+/// A fresh code for a game on the local network: `lan-` and an ordinary
+/// code, like `lan-42-comet-pilot`.
+pub fn new_lan_code(nameplate: u16) -> String {
+    format!("lan-{}", new_code(nameplate))
+}
+
+/// The nameplate of a typed local-network code, and the code normalised.
+pub fn parse_lan_code(code: &str) -> Option<(u16, String)> {
+    let code = code.trim().to_ascii_lowercase();
+    let (nameplate, words) = parse_code(code.strip_prefix("lan-")?)?;
+    Some((nameplate, format!("lan-{nameplate}-{words}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -84,5 +97,16 @@ mod tests {
         assert_eq!(parse_code("7-comet-pilot-otter"), None);
         assert_eq!(parse_code("7-comet-notaword"), None);
         assert_eq!(parse_code("x-comet-pilot"), None);
+    }
+
+    #[test]
+    fn lan_codes_round_trip() {
+        let code = new_lan_code(42);
+        assert_eq!(parse_lan_code(&code), Some((42, code.clone())));
+        assert_eq!(parse_lan_code(" LAN-42-Comet-Pilot "), Some((42, "lan-42-comet-pilot".into())));
+        // Each kind of code is only the one kind.
+        assert_eq!(parse_lan_code("42-comet-pilot"), None);
+        assert_eq!(parse_code("lan-42-comet-pilot"), None);
+        assert_eq!(parse_lan_code("lan-comet-pilot"), None);
     }
 }

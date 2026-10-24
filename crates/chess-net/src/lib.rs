@@ -9,13 +9,15 @@
 //! picks the right connection. Milestone 5's [`handshake`] then runs over
 //! that connection and authenticates and encrypts everything after it.
 //! [`connect`] does all of that in one call for the game, and [`link`]
-//! carries a game's messages afterwards.
+//! carries a game's messages afterwards. [`lan`] finds the other player on
+//! the local network instead, with no server.
 
 pub mod client;
 pub mod code;
 pub mod connect;
 mod frame;
 pub mod handshake;
+pub mod lan;
 mod line;
 pub mod link;
 pub mod relay;
