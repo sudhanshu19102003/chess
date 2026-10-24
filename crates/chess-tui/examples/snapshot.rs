@@ -1,7 +1,7 @@
 //! Renders the UI headlessly to a PNG, to check the look at any terminal
 //! size without a real terminal. macOS only (uses system fonts).
 //!
-//!     cargo run --release --example snapshot -- <cols> <rows> <out.png> [home|drawn|countdown|start|midgame|captures|check|promotion|mate|lobby|code|connecting|failed|online|dropped]
+//!     cargo run --release --example snapshot -- <cols> <rows> <out.png> [home|drawn|countdown|start|midgame|captures|check|promotion|mate|lobby|code|connecting|failed|unavailable|online|dropped]
 //!
 //! Set `CHESS_PIXELS=octant` to render the high-resolution pieces.
 
@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use chess_core::{Game, Position};
 use chess_tui::{
     app::{App, Lobby, Mode, Promotion, Screen},
-    net::{NetEvent, Request},
+    net::{Failure, NetEvent, Request},
     octant,
     render::Renderer,
 };
@@ -83,7 +83,14 @@ fn main() {
         "failed" => {
             app.screen = Screen::Lobby;
             let message = "the game codes did not match: check the code, or someone tried to listen in".into();
-            app.lobby = Lobby::Failed { request: Request::Join("7-comet-pilot".into()), message };
+            let failure = Failure { title: "COULD NOT CONNECT", message, detail: None };
+            app.lobby = Lobby::Failed { request: Request::Join("7-comet-pilot".into()), failure };
+        }
+        "unavailable" => {
+            app.screen = Screen::Lobby;
+            let error = std::io::Error::from(std::io::ErrorKind::ConnectionRefused);
+            let failure = Failure::from(&chess_net::connect::Error::NoServer { resolved: true, error });
+            app.lobby = Lobby::Failed { request: Request::Host(app.clock.offer()), failure };
         }
         "online" | "dropped" => {
             // Playing Black over a relay, a few moves in.

@@ -8,7 +8,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, M
 
 use crate::clock::{self, Clock};
 use crate::layout::{self, Fit};
-use crate::net::{NetEvent, Request};
+use crate::net::{Failure, NetEvent, Request};
 use crate::online::Online;
 use crate::panel::{self, HomeHit};
 
@@ -73,7 +73,7 @@ pub enum Lobby {
     Code { input: String, error: bool },
     /// Waiting on the network; `code` is the host's, once the server gave it.
     Connecting { request: Request, stage: Stage, code: Option<String> },
-    Failed { request: Request, message: String },
+    Failed { request: Request, failure: Failure },
 }
 
 impl Lobby {
@@ -638,9 +638,9 @@ impl App {
                     *stage = next;
                 }
             }
-            NetEvent::Failed(message) => {
+            NetEvent::Failed(failure) => {
                 if let Lobby::Connecting { request, .. } = &self.lobby {
-                    self.lobby = Lobby::Failed { request: request.clone(), message };
+                    self.lobby = Lobby::Failed { request: request.clone(), failure };
                 }
             }
             NetEvent::Ready { session, path, rtt } => {

@@ -8,7 +8,7 @@ use chess_core::{Color, Move, Position, parse_square};
 use chess_net::link::Event;
 use chess_net::{Path, Via};
 use chess_tui::app::{App, COUNTDOWN, Lobby, Mode, Screen};
-use chess_tui::net::{NetEvent, Request};
+use chess_tui::net::{Failure, NetEvent, Request};
 use chess_tui::online::LagQuota;
 use chess_verify::{GameId, Hash, MoveMsg, Session, SigningKey, TimeControl};
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
@@ -306,8 +306,9 @@ fn the_lobby_hosts_and_joins() {
     assert_eq!(app.requests, [Request::Join("7-quartz-quill".into())]);
 
     // A failure can be retried.
-    app.on_net(NetEvent::Failed("no answer".into()), now);
-    assert!(matches!(&app.lobby, Lobby::Failed { message, .. } if message == "no answer"));
+    let failure = Failure { title: "COULD NOT CONNECT", message: "no answer".into(), detail: None };
+    app.on_net(NetEvent::Failed(failure.clone()), now);
+    assert!(matches!(&app.lobby, Lobby::Failed { failure: f, .. } if *f == failure));
     press(&mut app, KeyCode::Enter);
     assert_eq!(app.requests.last(), Some(&Request::Join("7-quartz-quill".into())));
 

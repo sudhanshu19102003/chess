@@ -403,10 +403,17 @@ fn lobby(cv: &mut Canvas, out: &mut Vec<Text>, app: &App, x: i32, y: i32, now: I
             centred(out, x, HOME_W, y + 19, &format!("server {}", app.server), TEXT_FAINT);
             if code.is_some() { keys(&[("C", "copy"), ("ESC", "cancel")]) } else { keys(&[("ESC", "cancel")]) }
         }
-        Lobby::Failed { message, .. } => {
-            centred(out, x, HOME_W, y + 8, "COULD NOT CONNECT", ALARM_TOP);
-            for (i, line) in wrap(message, HOME_W as usize - 6).iter().take(6).enumerate() {
+        Lobby::Failed { failure, .. } => {
+            centred(out, x, HOME_W, y + 8, failure.title, ALARM_TOP);
+            let lines = wrap(&failure.message, HOME_W as usize - 6);
+            for (i, line) in lines.iter().take(6).enumerate() {
                 centred(out, x, HOME_W, y + 10 + i as i32, line, TEXT);
+            }
+            if let Some(detail) = &failure.detail {
+                let top = y + 11 + lines.len().min(6) as i32;
+                for (i, line) in wrap(detail, HOME_W as usize - 6).iter().take(3).enumerate() {
+                    centred(out, x, HOME_W, top + i as i32, line, TEXT_FAINT);
+                }
             }
             keys(&[("ENTER", "try again"), ("ESC", "back")])
         }

@@ -31,9 +31,44 @@ pub enum NetEvent {
     /// Connected: the session to play in, and how the connection goes.
     Ready { session: Box<Session>, path: Path, rtt: Duration },
     /// Connecting failed.
-    Failed(String),
+    Failed(Failure),
     /// During the game.
     Link(link::Event),
+}
+
+/// Why connecting failed, as the lobby shows it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Failure {
+    pub title: &'static str,
+    pub message: String,
+    /// The technical reason, shown faintly under the message.
+    pub detail: Option<String>,
+}
+
+impl From<&connect::Error> for Failure {
+    fn from(e: &connect::Error) -> Failure {
+        match e {
+            // The name resolved, so the player's internet works: the server
+            // is down.
+            connect::Error::NoServer { resolved: true, error } => Failure {
+                title: "SERVER UNAVAILABLE",
+                message: "Sorry, the game server isn't answering right now. This is on our side, not \
+                          your connection. Offline games still work. Try again later, or use your own \
+                          server with --server HOST."
+                    .into(),
+                detail: Some(error.to_string()),
+            },
+            // Either the player is offline or the server's name is gone.
+            connect::Error::NoServer { resolved: false, error } => Failure {
+                title: "CAN'T REACH THE SERVER",
+                message: "Sorry, the game server can't be reached. If your internet works, the server \
+                          is down on our side: try again later. Offline games still work."
+                    .into(),
+                detail: Some(error.to_string()),
+            },
+            e => Failure { title: "COULD NOT CONNECT", message: e.to_string(), detail: None },
+        }
+    }
 }
 
 struct Call {
@@ -86,7 +121,7 @@ impl Net {
             let linked = match connect::connect(&servers, start, progress).await {
                 Ok(linked) => linked,
                 Err(e) => {
-                    let _ = events_tx.send(NetEvent::Failed(e.to_string()));
+                    let _ = events_tx.send(NetEvent::Failed(Failure::from(&e)));
                     return;
                 }
             };

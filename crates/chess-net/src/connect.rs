@@ -74,7 +74,11 @@ pub struct Linked {
 pub enum Error {
     /// The typed code is not one this program would make.
     BadCode,
-    /// A server name did not resolve, or the server did not answer.
+    /// The rendezvous server (or the relay's name) could not be reached at
+    /// all. `resolved` says whether its name resolved: if it did, the
+    /// player's own connection is probably fine and the server is down.
+    NoServer { resolved: bool, error: io::Error },
+    /// The rendezvous server answered but pairing failed.
     Server(io::Error),
     /// Neither a direct connection nor the relay worked.
     NoConnection(io::Error),
@@ -85,6 +89,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Error::BadCode => f.write_str("that is not a game code (they look like 7-comet-pilot)"),
+            Error::NoServer { error, .. } => write!(f, "cannot reach the rendezvous server: {error}"),
             Error::Server(e) => write!(f, "rendezvous server: {e}"),
             Error::NoConnection(e) => write!(f, "could not reach the other player: {e}"),
             Error::Handshake(e) => e.fmt(f),
@@ -109,13 +114,16 @@ pub async fn connect(
         }
     };
     progress(Stage::Server);
-    let server = resolve(&servers.rendezvous, DEFAULT_PORT).await.map_err(Error::Server)?;
+    let unresolved = |error| Error::NoServer { resolved: false, error };
+    let server = resolve(&servers.rendezvous, DEFAULT_PORT).await.map_err(unresolved)?;
     let relay = match &servers.relay {
-        Some(relay) => resolve(relay, DEFAULT_RELAY_PORT).await.map_err(Error::Server)?,
+        Some(relay) => resolve(relay, DEFAULT_RELAY_PORT).await.map_err(unresolved)?,
         None => SocketAddr::new(server.ip(), DEFAULT_RELAY_PORT),
     };
     let probe = SocketAddr::new(server.ip(), server.port() + 1);
-    let mut rendezvous = Rendezvous::connect(server, probe).await.map_err(Error::Server)?;
+    let mut rendezvous = Rendezvous::connect(server, probe)
+        .await
+        .map_err(|error| Error::NoServer { resolved: true, error })?;
 
     let (role, peer, code) = match join {
         None => {
