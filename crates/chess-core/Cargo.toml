@@ -1,0 +1,10 @@
+[package]
+name = "chess-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+
+# Test oracle only; never in the shipped binary.
+[dev-dependencies]
+shakmaty = "0.30.2"

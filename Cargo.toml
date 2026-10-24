@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = ["crates/chess-core", "crates/chess-net", "crates/chess-tui", "crates/chess-verify"]
+
+# The piece images are rendered at startup; unoptimised that takes seconds.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2

@@ -1,0 +1,24 @@
+# Run with nightly: `cargo +nightly fuzz run decode` from crates/chess-verify.
+[package]
+name = "chess-verify-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+chess-core = { path = "../../chess-core" }
+chess-verify = { path = ".." }
+
+# Not part of the main workspace.
+[workspace]
+
+[[bin]]
+name = "decode"
+path = "fuzz_targets/decode.rs"
+test = false
+doc = false
+bench = false

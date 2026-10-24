@@ -1,0 +1,17 @@
+[package]
+name = "chess-tui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+base64 = "0.23.1"
+flate2 = "1.1.10"
+chess-core = { path = "../chess-core" }
+chess-net = { path = "../chess-net" }
+chess-verify = { path = "../chess-verify" }
+ratatui = "0.30.2"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "sync"] }
+
+[dev-dependencies]
+fontdue = "0.9.5"
+png = "0.18"

@@ -1,0 +1,12 @@
+[package]
+name = "chess-verify"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chess-core = { path = "../chess-core" }
+ed25519-dalek = "3.0.0"
+sha2 = "0.11.1"
+
+[dev-dependencies]
+proptest = "1.12.0"
