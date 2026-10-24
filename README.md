@@ -6,7 +6,7 @@ game. Written in Rust, with pixel-art pieces, chess clocks and a retro look.
 
 ![A game in progress](docs/screenshot.png)
 
-> **Status:** a hobby project, not released yet. Offline play is complete.
+> **Status:** a hobby project; v0.1.0 is out. Offline play is complete.
 > Online play is built and tested on one machine, but has not yet been played
 > between two machines on different networks, and there is no public server
 > yet (see [Playing online](#playing-online)).
@@ -23,35 +23,14 @@ game. Written in Rust, with pixel-art pieces, chess clocks and a retro look.
 
 ## Install
 
-### Build from source
-
-You need [Rust](https://rustup.rs) (stable) on macOS or Linux. Windows is
-untested. The repository is private for now, so cloning needs access to it.
-
-```sh
-git clone https://github.com/sudhanshu19102003/chess.git
-cd chess
-cargo install --path crates/chess-tui     # installs `chess-tui` into ~/.cargo/bin
-chess-tui
-```
-
-To run your own servers for online play, also install them:
-
-```sh
-cargo install --path crates/chess-net     # chess-rendezvous, chess-relay, chess-punch
-```
-
-Or run without installing: `cargo run --release -p chess-tui`.
-
-### Soon: one command
+### One command
 
 ```sh
 curl -fsSL https://chess.thesudhanshu.dev/install.sh | sh
 ```
 
-This works once the repository is public, a release is tagged and the domain
-serves the script. It runs on Linux (x86_64 and aarch64, any distribution:
-the binaries are static) and macOS (Intel and Apple silicon). What it does:
+It runs on Linux (x86_64 and aarch64, any distribution: the binaries are
+static) and macOS (Intel and Apple silicon). What it does:
 
 - Detects the OS and CPU with `uname` (and spots a shell running under
   Rosetta on Apple silicon).
@@ -83,6 +62,26 @@ a GitHub release with `install.sh` attached, and redeploys
 `chess.thesudhanshu.dev` (GitHub Pages: `site/index.html` plus that
 `install.sh`). `scripts/package.sh TARGET`
 also builds an archive locally (a Mac can build the Linux ones too).
+
+### Build from source
+
+You need [Rust](https://rustup.rs) (stable) on macOS or Linux. Windows is
+untested.
+
+```sh
+git clone https://github.com/sudhanshu19102003/chess.git
+cd chess
+cargo install --path crates/chess-tui     # installs `chess-tui` into ~/.cargo/bin
+chess-tui
+```
+
+To run your own servers for online play, also install them:
+
+```sh
+cargo install --path crates/chess-net     # chess-rendezvous, chess-relay, chess-punch
+```
+
+Or run without installing: `cargo run --release -p chess-tui`.
 
 ## Play
 
