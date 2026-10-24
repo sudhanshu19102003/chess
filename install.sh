@@ -56,11 +56,18 @@ target() {
     esac
 }
 
-fetch() { # URL FILE
+fetch() { # URL FILE [progress]
+    # Some networks silently drop one of GitHub's download addresses. A short
+    # connect timeout makes curl move on to the next address after a few
+    # seconds, instead of hanging for a minute or more.
     if has curl; then
-        curl -fsSL --proto '=https,file' --tlsv1.2 -o "$2" "$1" || die "could not download $1"
+        bar=-s
+        [ -n "${3:-}" ] && [ -t 2 ] && bar=-#
+        curl -fSL "$bar" --proto '=https,file' --tlsv1.2 --connect-timeout 8 \
+            --retry 3 --retry-delay 1 -o "$2" "$1" || die "could not download $1"
     elif has wget; then
-        wget -q --https-only -O "$2" "$1" || die "could not download $1"
+        wget -q --https-only --connect-timeout=8 --tries=3 -O "$2" "$1" ||
+            die "could not download $1"
     else
         die "need curl or wget to download"
     fi
@@ -112,7 +119,7 @@ main() {
     want=$(awk -v f="$archive" '$2 == f || $2 == "*" f { print $1 }' "$tmp/SHA256SUMS")
     [ -n "$want" ] || die "this release has no $archive"
 
-    fetch "$base/$archive" "$tmp/$archive"
+    fetch "$base/$archive" "$tmp/$archive" progress
     [ "$(sha256 "$tmp/$archive")" = "$want" ] ||
         die "$archive does not match its signed checksum; not installing"
     say "signature and checksum OK"

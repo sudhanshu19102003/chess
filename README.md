@@ -57,11 +57,12 @@ default, so online play works with no setup; later maybe a Homebrew tap.
 `Cargo.toml`, then push a matching tag (`git tag v0.1.0 && git push origin
 v0.1.0`). `.github/workflows/release.yml` tests, builds the four archives
 with `scripts/package.sh`, signs `SHA256SUMS` with the `RELEASE_SIGNING_KEY`
-secret, installs from the result with `install.sh` as a check, publishes
-a GitHub release with `install.sh` attached, and redeploys
-`chess.thesudhanshu.dev` (GitHub Pages: `site/index.html` plus that
-`install.sh`). `scripts/package.sh TARGET`
+secret, installs from the result with `install.sh` as a check, and publishes
+a GitHub release with `install.sh` attached. `scripts/package.sh TARGET`
 also builds an archive locally (a Mac can build the Linux ones too).
+`chess.thesudhanshu.dev` (GitHub Pages: `site/index.html` and `install.sh`)
+is redeployed by `.github/workflows/pages.yml` whenever either changes on
+`main`, without a release.
 
 ### Build from source
 
