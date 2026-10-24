@@ -335,3 +335,50 @@ fn offline_resign_and_draw() {
     press(&mut app, KeyCode::Char('d'));
     assert_eq!(app.draw_offer, Some(Color::White), "a fresh offer");
 }
+
+#[test]
+fn auto_flip_turns_the_board_after_the_piece_lands() {
+    let mut app = game();
+    assert!(app.auto_flip && !app.flipped);
+    let t = Instant::now();
+    click(&mut app, "e2");
+    click(&mut app, "e4");
+    // The move stays in view while the piece slides and for a moment after.
+    app.tick(t + std::time::Duration::from_millis(100));
+    assert!(!app.flipped);
+    app.tick(t + std::time::Duration::from_secs(2));
+    assert!(app.flipped, "Black to move, so Black at the bottom");
+
+    let t = Instant::now();
+    click(&mut app, "e7");
+    click(&mut app, "e5");
+    app.tick(t + std::time::Duration::from_secs(2));
+    assert!(!app.flipped, "White to move again");
+}
+
+#[test]
+fn a_turns_auto_flip_off_and_on() {
+    let mut app = game();
+    press(&mut app, KeyCode::Char('a'));
+    assert!(!app.auto_flip);
+    let t = Instant::now();
+    click(&mut app, "e2");
+    click(&mut app, "e4");
+    app.tick(t + std::time::Duration::from_secs(2));
+    assert!(!app.flipped, "off: the board stays put");
+
+    // Turning it back on turns the board to the side to move at once.
+    press(&mut app, KeyCode::Char('a'));
+    app.tick(Instant::now());
+    assert!(app.auto_flip && app.flipped);
+}
+
+#[test]
+fn with_auto_flip_a_new_game_starts_from_whites_side() {
+    let mut app = game();
+    app.flipped = true;
+    press(&mut app, KeyCode::Char('r'));
+    assert_eq!(app.screen, Screen::Home);
+    press(&mut app, KeyCode::Enter);
+    assert!(!app.flipped);
+}

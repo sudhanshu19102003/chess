@@ -13,6 +13,9 @@ use crate::online::Online;
 use crate::panel::{self, HomeHit};
 
 const SLIDE_TIME: Duration = Duration::from_millis(180);
+/// With auto flip, how long the moved piece stays in view, after it lands,
+/// before the board turns.
+const FLIP_PAUSE: Duration = Duration::from_millis(500);
 /// From choosing a mode to White's clock starting.
 pub const COUNTDOWN: Duration = Duration::from_secs(3);
 /// How long the "not built yet" note shows on the home screen.
@@ -216,6 +219,11 @@ pub struct App {
     pub history: Vec<MoveRecord>,
     /// Draw the board from Black's side.
     pub flipped: bool,
+    /// Offline, turn the board after each move so the side to move is at
+    /// the bottom.
+    pub auto_flip: bool,
+    /// When the board turns next, with auto flip.
+    pub flip_at: Option<Instant>,
     pub quit: bool,
     pub clock: Clock,
     pub slide: Option<Slide>,
@@ -267,6 +275,8 @@ impl App {
             last_move: None,
             history: Vec::new(),
             flipped: false,
+            auto_flip: true,
+            flip_at: None,
             quit: false,
             clock: Clock::new(clock::DEFAULT_PRESET),
             slide: None,
@@ -452,7 +462,9 @@ impl App {
     fn fresh(&self, now: Instant) -> App {
         App {
             mode: self.mode,
-            flipped: self.flipped,
+            // With auto flip a new game starts from White's side.
+            flipped: self.flipped && !self.auto_flip,
+            auto_flip: self.auto_flip,
             hires: self.hires,
             size: self.size,
             play_anyway: self.play_anyway,
@@ -525,6 +537,19 @@ impl App {
         if self.slide.as_ref().is_some_and(|s| now.saturating_duration_since(s.start) >= SLIDE_TIME) {
             self.slide = None;
         }
+        // Not while a piece is being dragged: the board would turn under it.
+        if self.flip_at.is_some_and(|at| now >= at) && self.drag.is_none() {
+            self.flip_at = None;
+            if self.auto_flip && self.online.is_none() {
+                self.flipped = self.to_move() == Side::Black;
+            }
+        }
+    }
+
+    /// `a`: auto flip on or off. Turning it on turns the board at once.
+    fn toggle_auto_flip(&mut self, now: Instant) {
+        self.auto_flip = !self.auto_flip;
+        self.flip_at = self.auto_flip.then_some(now);
     }
 
     pub fn on_key(&mut self, key: KeyEvent, now: Instant) {
@@ -556,6 +581,7 @@ impl App {
                 match key.code {
                     KeyCode::Esc => self.go_home(now),
                     KeyCode::Char('f') => self.flipped = !self.flipped,
+                    KeyCode::Char('a') if self.online.is_none() => self.toggle_auto_flip(now),
                     KeyCode::Char('g') => self.hires = !self.hires,
                     _ => {}
                 }
@@ -577,6 +603,7 @@ impl App {
                 self.on_input_key(key.code, now);
             }
             KeyCode::Char('f') => self.flipped = !self.flipped,
+            KeyCode::Char('a') if self.online.is_none() => self.toggle_auto_flip(now),
             KeyCode::Char('g') => self.hires = !self.hires,
             KeyCode::Char('r') => self.leave(now),
             KeyCode::Char('d') => self.draw(now),
@@ -606,6 +633,7 @@ impl App {
                 self.clock = Clock::new((self.clock.preset + 1) % presets);
             }
             KeyCode::Left | KeyCode::Char('h') => self.clock = Clock::new((self.clock.preset + presets - 1) % presets),
+            KeyCode::Char('a') if self.mode == Mode::Offline => self.auto_flip = !self.auto_flip,
             KeyCode::Enter | KeyCode::Char(' ') if self.mode == Mode::PeerToPeer => {
                 self.screen = Screen::Lobby;
                 self.lobby = Lobby::Choose { pick: Pick::Host };
@@ -905,6 +933,9 @@ impl App {
         }
         self.last_move = Some((mv.from, mv.to));
         self.slide = Some(Slide { movers, captured, start: now });
+        if self.auto_flip && self.online.is_none() && !self.over() {
+            self.flip_at = Some(now + SLIDE_TIME + FLIP_PAUSE);
+        }
         self.history.push(MoveRecord { piece, san: before.san(mv), captured: captured.map(|(p, _)| p) });
         true
     }
@@ -1057,6 +1088,7 @@ impl App {
                 self.on_lobby_key(KeyCode::Enter);
             }
             HomeHit::Copy => self.copy_code(),
+            HomeHit::AutoFlip => self.on_home_key(KeyCode::Char('a'), now),
         }
     }
 

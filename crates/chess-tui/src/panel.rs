@@ -178,9 +178,19 @@ fn time_spans(app: &App) -> Spans {
     ]
 }
 
+/// Auto flip, on or off, with its key.
+fn flip_spans(app: &App) -> Spans {
+    vec![
+        ("AUTO FLIP  ".into(), TEXT_DIM, false),
+        (if app.auto_flip { "ON " } else { "OFF" }.into(), TEXT, true),
+        ("  A".into(), AMBER, true),
+    ]
+}
+
 /// Row of the time control on the home screen and in the lobby, below the
-/// three buttons.
+/// three buttons, and of auto flip on the home screen (offline only).
 const HOME_TIME_ROW: i32 = 20;
+const HOME_FLIP_ROW: i32 = 21;
 /// Width of a menu button, and the row of the first one.
 const BUTTON_W: i32 = 30;
 const BUTTONS_ROW: i32 = 8;
@@ -200,6 +210,8 @@ pub enum HomeHit {
     Pick(Pick),
     /// The game code or the copy button.
     Copy,
+    /// Auto flip, on the home screen.
+    AutoFlip,
 }
 
 /// What the cell (`col`, `row`) of a `w` x `h` window is on the home screen
@@ -218,7 +230,13 @@ pub fn home_hit(app: &App, w: i32, h: i32, col: i32, row: i32) -> Option<HomeHit
         (Screen::Home, _) => (0..Mode::ALL.len())
             .find(|&i| button(i as i32))
             .map(|i| HomeHit::Mode(Mode::ALL[i]))
-            .or_else(|| time(y + HOME_TIME_ROW)),
+            .or_else(|| time(y + HOME_TIME_ROW))
+            .or_else(|| {
+                let len: i32 = flip_spans(app).iter().map(|(s, _, _)| s.chars().count() as i32).sum();
+                let start = x + (HOME_W - len) / 2;
+                let on = app.mode == Mode::Offline && row == y + HOME_FLIP_ROW && (start..start + len).contains(&col);
+                on.then_some(HomeHit::AutoFlip)
+            }),
         (Screen::Lobby, Lobby::Choose { pick }) => (0..Pick::ALL.len())
             .find(|&i| button(i as i32))
             .map(|i| HomeHit::Pick(Pick::ALL[i]))
@@ -269,6 +287,9 @@ pub fn home(cv: &mut Canvas, out: &mut Vec<Text>, app: &App, w: i32, h: i32, now
         button(cv, out, x, y + BUTTONS_ROW + 4 * i as i32, mode.name(), mode == app.mode, mode.available(), pulse);
     }
     centred_spans(out, x, HOME_W, y + HOME_TIME_ROW, &time_spans(app));
+    if app.mode == Mode::Offline {
+        centred_spans(out, x, HOME_W, y + HOME_FLIP_ROW, &flip_spans(app));
+    }
 
     if app.notice_showing(now) {
         centred(out, x, HOME_W, y + 22, &format!("{} is not built yet", app.mode.name()), ALARM_TOP);
@@ -682,6 +703,7 @@ fn help_lines(app: &App, w: i32) -> Vec<Spans> {
         ("X", "resign"),
         ("ESC", "cancel"),
         ("F", "flip"),
+        ("A", if app.auto_flip { "auto flip: on" } else { "auto flip: off" }),
         ("G", "hi-res"),
         ("P", "pause"),
         ("R", if online { "leave" } else { "menu" }),
@@ -690,7 +712,7 @@ fn help_lines(app: &App, w: i32) -> Vec<Spans> {
     let mut lines = Vec::new();
     let mut line: Spans = Vec::new();
     let mut len = 0;
-    for (key, desc) in keys.into_iter().filter(|&(k, _)| !(online && k == "P")) {
+    for (key, desc) in keys.into_iter().filter(|&(k, _)| !(online && (k == "P" || k == "A"))) {
         let item = key.chars().count() as i32 + 1 + desc.len() as i32;
         if len > 0 && len + 2 + item > w {
             lines.push(std::mem::take(&mut line));

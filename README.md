@@ -104,6 +104,7 @@ and the game starts after a 3-2-1 countdown.
 | `d` | offer a draw, or accept the other player's |
 | `x` twice | resign |
 | `f` | flip the board |
+| `a` | auto flip on or off (offline; on by default: after each move the board turns to the side to move) |
 | `g` | high-resolution pieces on or off |
 | `p` | pause the clock (offline only) |
 | `r` | back to the home screen (twice in an unfinished online game) |
