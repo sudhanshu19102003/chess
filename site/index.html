@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terminal Chess</title>
+<meta name="description" content="Two-player chess in the terminal, peer to peer.">
+<style>
+  :root { --bg: #f4efe6; --fg: #2b2620; --muted: #6b6257; --box: #e8e0d2; --edge: #cfc3ae; --accent: #8a5a2b; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1b1916; --fg: #ece5d8; --muted: #a39a8c; --box: #26231f; --edge: #3a352e; --accent: #d9a066; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 16px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  main { max-width: 46rem; margin: 0 auto; padding: 3rem 16px; }
+  h1 { font-size: 1.6rem; margin: 0 0 .25rem; letter-spacing: .04em; }
+  .tag { color: var(--muted); margin: 0 0 2rem; }
+  pre { background: var(--box); border: 1px solid var(--edge); border-radius: 6px;
+        box-shadow: 0 3px 0 var(--edge); padding: 1rem; overflow-x: auto; margin: .5rem 0 1.5rem; }
+  a { color: var(--accent); }
+  img { max-width: 100%; border-radius: 6px; border: 1px solid var(--edge); margin: 1rem 0 2rem; }
+  li { margin: .25rem 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>♚ Terminal Chess</h1>
+  <p class="tag">Two-player chess in the terminal, peer to peer. Both players' programs check every move; no server referees the game.</p>
+
+  <p>Install on macOS or Linux (x86_64 or ARM):</p>
+  <pre>curl -fsSL https://chess.thesudhanshu.dev/install.sh | sh</pre>
+
+  <p>Then run <code>chess-tui</code> in a terminal of about 146 × 50 cells.</p>
+
+  <img src="https://raw.githubusercontent.com/sudhanshu19102003/chess/main/docs/screenshot.png" alt="A game in progress">
+
+  <ul>
+    <li>The script installs to <code>~/.local/bin</code> without sudo, and refuses any download whose signature or checksum does not match. <a href="install.sh">Read it first</a>.</li>
+    <li>Pin a version: <code>curl -fsSL https://chess.thesudhanshu.dev/install.sh | CHESS_VERSION=v0.1.0 sh</code></li>
+    <li>Source, releases and the full guide: <a href="https://github.com/sudhanshu19102003/chess">github.com/sudhanshu19102003/chess</a></li>
+  </ul>
+</main>
+</body>
+</html>

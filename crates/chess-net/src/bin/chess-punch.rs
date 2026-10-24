@@ -25,8 +25,8 @@ usage: chess-punch [OPTIONS] host
        chess-punch [OPTIONS] join CODE
 
 options:
-  --server HOST[:PORT]  rendezvous server: $CHESS_RENDEZVOUS, or 127.0.0.1;
-                        port 7777
+  --server HOST[:PORT]  rendezvous server: $CHESS_RENDEZVOUS, or
+                        play.chess.thesudhanshu.dev; port 7777
   --relay HOST[:PORT]   relay: the server's host, port 443
   --force-relay         skip the direct attempt (both sides must pass it)";
 
@@ -59,7 +59,8 @@ async fn main() -> ExitCode {
 
 fn parse_args(args: Vec<String>) -> Result<Options, String> {
     let mut options = Options {
-        server: std::env::var("CHESS_RENDEZVOUS").unwrap_or_else(|_| "127.0.0.1".into()),
+        server: std::env::var("CHESS_RENDEZVOUS")
+            .unwrap_or_else(|_| chess_net::DEFAULT_SERVER.into()),
         relay: None,
         force_relay: false,
         join: None,

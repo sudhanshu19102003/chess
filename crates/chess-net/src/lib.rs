@@ -31,3 +31,8 @@ pub use server::{Stats, serve};
 /// Default port of the rendezvous server. The NAT probe listens on the next
 /// port up.
 pub const DEFAULT_PORT: u16 = 7777;
+
+/// The public rendezvous server and relay (a Google Cloud VM, set up with
+/// `deploy/setup.sh`), used unless `--server` or `$CHESS_RENDEZVOUS` says
+/// otherwise.
+pub const DEFAULT_SERVER: &str = "play.chess.thesudhanshu.dev";

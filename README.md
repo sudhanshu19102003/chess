@@ -78,8 +78,10 @@ default, so online play works with no setup; later maybe a Homebrew tap.
 `Cargo.toml`, then push a matching tag (`git tag v0.1.0 && git push origin
 v0.1.0`). `.github/workflows/release.yml` tests, builds the four archives
 with `scripts/package.sh`, signs `SHA256SUMS` with the `RELEASE_SIGNING_KEY`
-secret, installs from the result with `install.sh` as a check, and publishes
-a GitHub release with `install.sh` attached. `scripts/package.sh TARGET`
+secret, installs from the result with `install.sh` as a check, publishes
+a GitHub release with `install.sh` attached, and redeploys
+`chess.thesudhanshu.dev` (GitHub Pages: `site/index.html` plus that
+`install.sh`). `scripts/package.sh TARGET`
 also builds an archive locally (a Mac can build the Linux ones too).
 
 ## Play
@@ -127,49 +129,52 @@ An online game needs two small servers:
 - **`chess-relay`** passes encrypted bytes between the players when they can't
   connect directly. It cannot read or change them.
 
-There is no public server yet, and `chess-tui` looks for both on `127.0.0.1`
-unless told otherwise.
+`chess-tui` uses the public ones at `play.chess.thesudhanshu.dev` (a small
+Google Cloud machine; being set up, not live yet). To use other servers, pass
+`--server HOST[:PORT]` or set `CHESS_RENDEZVOUS`. The relay defaults to the
+same host on port 443; `--relay HOST[:PORT]` or `CHESS_RELAY` if it lives
+elsewhere.
 
 ### Try it on one machine
 
 ```sh
 cargo run --release -p chess-net --bin chess-rendezvous          # terminal 1
 cargo run --release -p chess-net --bin chess-relay -- --port 4443 # terminal 2
-cargo run --release -p chess-tui -- --relay 127.0.0.1:4443       # terminal 3: host
-cargo run --release -p chess-tui -- --relay 127.0.0.1:4443       # terminal 4: join
+export CHESS_RENDEZVOUS=127.0.0.1 CHESS_RELAY=127.0.0.1:4443     # terminals 3 and 4
+cargo run --release -p chess-tui                                  # terminal 3: host
+cargo run --release -p chess-tui                                  # terminal 4: join
 ```
+
+### Run your own servers
+
+Any Linux machine with systemd and a public IPv4 address will do, such as a
+small VPS. Open TCP ports 7777 and 7778 (the NAT probe) in its firewall, and
+443 if it runs the relay. Copy a release archive (or one from
+`scripts/package.sh`) and `deploy/setup.sh` to it, and run:
+
+```sh
+sudo sh setup.sh chess-x86_64-unknown-linux-musl.tar.gz            # rendezvous only
+sudo sh setup.sh --relay chess-x86_64-unknown-linux-musl.tar.gz    # and the relay
+```
+
+That installs the servers as services that start on boot, run without
+privileges, and restart if they fail; running it again with a newer archive
+upgrades them. The relay runs only with `--relay`: a run without it stops
+and disables a relay set up earlier. With no relay, players whose direct
+connection fails cannot play. `sudo chess-rendezvous stats /var/lib/chess/results.log` shows
+how often players connected directly. For a Google Cloud VM,
+`deploy/deploy.sh [--relay] VM_NAME [ZONE]` builds the archive and does all of this
+through `gcloud`. Then point the players at it with `--server`.
 
 ### Play between two machines
 
-1. **Run the servers** on a machine with a public IPv4 address, such as a
-   small VPS. Open TCP ports 7777, 7778 (the NAT probe) and 443 in its
-   firewall.
-
-   ```sh
-   cargo build --release -p chess-net
-   ./target/release/chess-rendezvous --log results.log
-   sudo setcap cap_net_bind_service=+ep target/release/chess-relay   # Linux: lets it use port 443
-   ./target/release/chess-relay
-   ```
-
-2. **Point both players at it**, with a flag or an environment variable:
-
-   ```sh
-   chess-tui --server your.server.example
-   # or
-   export CHESS_RENDEZVOUS=your.server.example
-   ```
-
-   The relay defaults to the same host on port 443. Use `--relay HOST[:PORT]`
-   or `CHESS_RELAY` if it lives elsewhere.
-
-3. **Host:** choose PEER TO PEER → HOST A GAME and a time control. You get a
+1. **Host:** choose PEER TO PEER → HOST A GAME and a time control. You get a
    code like `7-comet-pilot`, already copied to your clipboard (`c` copies it
    again). Send it to your friend.
 
-4. **Join:** choose PEER TO PEER → JOIN WITH A CODE and type the code.
+2. **Join:** choose PEER TO PEER → JOIN WITH A CODE and type the code.
 
-5. The programs try to connect directly for up to 20 seconds, then fall back
+3. The programs try to connect directly for up to 20 seconds, then fall back
    to the relay. Colours are decided by a fair coin flip that neither side can
    steer. On macOS, allow incoming connections if the firewall asks.
 

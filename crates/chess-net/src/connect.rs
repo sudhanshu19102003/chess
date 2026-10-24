@@ -15,7 +15,7 @@ use crate::client::{PUNCH_LIMIT, RELAY_LIMIT};
 use crate::code::{new_code, parse_code};
 use crate::handshake::{self, Established, Offer};
 use crate::relay::DEFAULT_RELAY_PORT;
-use crate::{DEFAULT_PORT, Path, Rendezvous, Report, Role, measure_rtt, via_relay};
+use crate::{DEFAULT_PORT, DEFAULT_SERVER, Path, Rendezvous, Report, Role, measure_rtt, via_relay};
 
 /// Where the servers are, as typed: `HOST` or `HOST:PORT`.
 #[derive(Clone, Debug)]
@@ -28,10 +28,10 @@ pub struct Servers {
 }
 
 impl Servers {
-    /// `$CHESS_RENDEZVOUS` (or 127.0.0.1) and `$CHESS_RELAY`.
+    /// `$CHESS_RENDEZVOUS` (or [`DEFAULT_SERVER`]) and `$CHESS_RELAY`.
     pub fn from_env() -> Servers {
         Servers {
-            rendezvous: std::env::var("CHESS_RENDEZVOUS").unwrap_or_else(|_| "127.0.0.1".into()),
+            rendezvous: std::env::var("CHESS_RENDEZVOUS").unwrap_or_else(|_| DEFAULT_SERVER.into()),
             relay: std::env::var("CHESS_RELAY").ok(),
             force_relay: false,
         }

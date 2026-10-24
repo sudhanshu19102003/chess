@@ -14,7 +14,7 @@ const USAGE: &str = "\
 usage: chess-tui [--server HOST[:PORT]] [--relay HOST[:PORT]] [--force-relay]
 
   --server   rendezvous server for peer-to-peer games: $CHESS_RENDEZVOUS,
-             or 127.0.0.1; port 7777
+             or play.chess.thesudhanshu.dev; port 7777
   --relay    relay: $CHESS_RELAY, or the server's host on port 443
   --force-relay  skip the direct connection (both players must pass it)
   --version  print the version";
