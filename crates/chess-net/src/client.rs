@@ -38,7 +38,7 @@ const PROBE_WAIT: Duration = Duration::from_secs(3);
 /// second, so this covers two or three SYNs before starting over.
 const ATTEMPT_WAIT: Duration = Duration::from_secs(3);
 const RETRY_DELAY: Duration = Duration::from_millis(200);
-const HELLO_WAIT: Duration = Duration::from_secs(5);
+pub(crate) const HELLO_WAIT: Duration = Duration::from_secs(5);
 const PINGS: usize = 5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,6 +112,8 @@ pub enum Via {
     Other,
     /// Through the relay, not direct.
     Relay,
+    /// Found on the local network, with no server.
+    Lan,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -129,6 +131,7 @@ impl fmt::Display for Path {
             Via::Private => "private",
             Via::Other => "other",
             Via::Relay => return f.write_str("relay"),
+            Via::Lan => return f.write_str("lan"),
         };
         write!(f, "{via}-{}", if self.outgoing { "out" } else { "in" })
     }
@@ -456,7 +459,7 @@ pub async fn measure_rtt(stream: &mut BufReader<TcpStream>, role: Role) -> io::R
 
 /// Checks the connection reached this pairing's peer in the other role. The
 /// joiner then waits for the host to pick this connection.
-async fn hello(
+pub(crate) async fn hello(
     mut conn: BufReader<TcpStream>,
     token: &str,
     role: Role,

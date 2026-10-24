@@ -393,6 +393,7 @@ fn lobby(cv: &mut Canvas, out: &mut Vec<Text>, app: &App, x: i32, y: i32, now: I
             }
             let what = match stage {
                 Stage::Server => "contacting the server",
+                Stage::Searching => "looking on this network",
                 Stage::Code(_) => "waiting for the other player",
                 Stage::Punching => "connecting directly",
                 Stage::Relay => "connecting through the relay",

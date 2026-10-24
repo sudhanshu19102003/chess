@@ -1,7 +1,8 @@
 //! From a game code to a secure channel, the way the game uses it: meet
 //! through the rendezvous server, connect directly or through the relay,
 //! report how it went, and run the handshake. Progress is reported as it
-//! goes, so a UI can show each stage.
+//! goes, so a UI can show each stage. Hosting on the local network, or a
+//! `lan-` code, goes to [`lan`] instead, with no server.
 
 use std::fmt;
 use std::io;
@@ -12,8 +13,9 @@ use tokio::io::BufReader;
 use tokio::net::TcpStream;
 
 use crate::client::{PUNCH_LIMIT, RELAY_LIMIT};
-use crate::code::{new_code, parse_code};
+use crate::code::{new_code, parse_code, parse_lan_code};
 use crate::handshake::{self, Established, Offer};
+use crate::lan::{self, LAN_PORT};
 use crate::relay::DEFAULT_RELAY_PORT;
 use crate::{DEFAULT_PORT, DEFAULT_SERVER, Path, Rendezvous, Report, Role, measure_rtt, via_relay};
 
@@ -43,7 +45,10 @@ impl Servers {
 pub enum Start {
     /// Get a code and offer this time control and colour choice.
     Host(Offer),
-    /// Join with a code the player typed.
+    /// Host on the local network, with no server (see [`lan`]).
+    HostLan(Offer),
+    /// Join with a code the player typed. A `lan-` code is looked for on
+    /// the local network.
     Join(String),
 }
 
@@ -58,6 +63,8 @@ pub enum Stage {
     Punching,
     /// No direct connection; meeting at the relay.
     Relay,
+    /// Looking for the host on the local network.
+    Searching,
     /// Connected; checking the code and agreeing keys and colours.
     Handshake,
 }
@@ -107,6 +114,8 @@ pub async fn connect(
 ) -> Result<Linked, Error> {
     // Check a typed code before contacting anyone.
     let join = match &start {
+        Start::HostLan(offer) => return lan::host(*offer, LAN_PORT, progress).await,
+        Start::Join(code) if parse_lan_code(code).is_some() => return lan::join(code, LAN_PORT, progress).await,
         Start::Host(_) => None,
         Start::Join(code) => {
             let (nameplate, words) = parse_code(code).ok_or(Error::BadCode)?;
@@ -165,7 +174,7 @@ pub async fn connect(
 
     progress(Stage::Handshake);
     let established = match start {
-        Start::Host(offer) => handshake::host(connection.stream, &code, offer).await,
+        Start::Host(offer) | Start::HostLan(offer) => handshake::host(connection.stream, &code, offer).await,
         Start::Join(_) => handshake::join(connection.stream, &code).await,
     }
     .map_err(Error::Handshake)?;
