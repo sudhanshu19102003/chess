@@ -29,8 +29,14 @@ game. Written in Rust, with pixel-art pieces, chess clocks and a retro look.
 curl -fsSL https://chess.thesudhanshu.dev/install.sh | sh
 ```
 
-It runs on Linux (x86_64 and aarch64, any distribution: the binaries are
-static) and macOS (Intel and Apple silicon). What it does:
+On Windows 10 or 11, in PowerShell:
+
+```powershell
+irm https://chess.thesudhanshu.dev/install.ps1 | iex
+```
+
+`install.sh` runs on Linux (x86_64 and aarch64, any distribution: the
+binaries are static) and macOS (Intel and Apple silicon). What it does:
 
 - Detects the OS and CPU with `uname` (and spots a shell running under
   Rosetta on Apple silicon).
@@ -42,11 +48,25 @@ static) and macOS (Intel and Apple silicon). What it does:
 - Installs `chess-tui` to `~/.local/bin` (no sudo) and tells you if that
   folder is not on your `PATH`. Running it again updates.
 
+`install.ps1` does the same on Windows (x86_64 and ARM64; Windows PowerShell
+5.1 or PowerShell 7). It checks the signature with the `ssh-keygen` from
+Windows' OpenSSH Client, which Windows 10 and 11 install by default (if it is
+missing: Settings > System > Optional features > OpenSSH Client). It
+installs `chess-tui.exe` to `%LOCALAPPDATA%\Programs\chess` without
+administrator rights and adds that folder to your user `PATH`
+(`$env:CHESS_NO_MODIFY_PATH = '1'` leaves `PATH` alone). The binaries need no
+Visual C++ runtime. Play in Windows Terminal; its default window is too
+small, so zoom out (Ctrl+-) or make it bigger.
+
 Settings: `CHESS_VERSION=v0.1.0` installs a given release,
 `CHESS_INSTALL_DIR` picks another folder. For example:
 
 ```sh
 curl -fsSL https://chess.thesudhanshu.dev/install.sh | CHESS_VERSION=v0.1.0 sh
+```
+
+```powershell
+$env:CHESS_VERSION = 'v0.1.0'; irm https://chess.thesudhanshu.dev/install.ps1 | iex
 ```
 
 Each release archive also holds `chess-rendezvous` and `chess-relay`, for
@@ -55,19 +75,23 @@ default, so online play works with no setup; later maybe a Homebrew tap.
 
 **Making a release** (maintainers): set the `chess-tui` version in its
 `Cargo.toml`, then push a matching tag (`git tag v0.1.0 && git push origin
-v0.1.0`). `.github/workflows/release.yml` tests, builds the four archives
-with `scripts/package.sh`, signs `SHA256SUMS` with the `RELEASE_SIGNING_KEY`
-secret, installs from the result with `install.sh` as a check, and publishes
-a GitHub release with `install.sh` attached. `scripts/package.sh TARGET`
-also builds an archive locally (a Mac can build the Linux ones too).
-`chess.thesudhanshu.dev` (GitHub Pages: `site/index.html` and `install.sh`)
-is redeployed by `.github/workflows/pages.yml` whenever either changes on
-`main`, without a release.
+v0.1.0`). `.github/workflows/release.yml` tests, builds the six archives
+(`.tar.gz` for Linux and macOS, `.zip` for Windows) with
+`scripts/package.sh`, signs `SHA256SUMS` with the `RELEASE_SIGNING_KEY`
+secret, installs from the result with `install.sh` on Linux and
+`install.ps1` on Windows as a check, and publishes a GitHub release with
+both scripts attached. Running the workflow by hand (Actions > release > Run
+workflow) does all of that except the release, as a dry run.
+`scripts/package.sh TARGET` also builds an archive locally (a Mac can build
+the Linux ones too; the Windows ones need Windows). `chess.thesudhanshu.dev`
+(GitHub Pages: `site/index.html`, `install.sh` and `install.ps1`) is
+redeployed by `.github/workflows/pages.yml` whenever one changes on `main`,
+without a release.
 
 ### Build from source
 
-You need [Rust](https://rustup.rs) (stable) on macOS or Linux. Windows is
-untested.
+You need [Rust](https://rustup.rs) (stable) on macOS, Linux or Windows
+(Windows builds in CI but has not been played on by hand yet).
 
 ```sh
 git clone https://github.com/sudhanshu19102003/chess.git

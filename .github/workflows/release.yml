@@ -1,14 +1,20 @@
-# Pushing a tag like v0.1.0 builds the four archives, signs SHA256SUMS with
-# the release key and publishes a GitHub release with install.sh beside them.
+# Pushing a tag like v0.1.0 builds the six archives, signs SHA256SUMS with
+# the release key, installs from the signed files with install.sh (Linux) and
+# install.ps1 (Windows) as a check, and publishes a GitHub release with both
+# scripts beside the archives.
+#
+# Running it by hand (Actions > release > Run workflow) is a dry run: the
+# same builds, signing and install checks, but no tag check and no release.
 #
 # Needs one repository secret, RELEASE_SIGNING_KEY: the OpenSSH private key
-# whose public half is PUBKEY in install.sh.
+# whose public half is PUBKEY in install.sh (and $PubKey in install.ps1).
 
 name: release
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -19,11 +25,26 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Tag matches the chess-tui version
+        if: github.ref_type == 'tag'
         run: |
           version=$(cargo metadata --no-deps --format-version 1 |
             jq -r '.packages[] | select(.name == "chess-tui") | .version')
           [ "v$version" = "$GITHUB_REF_NAME" ] ||
             { echo "tag $GITHUB_REF_NAME but chess-tui is $version"; exit 1; }
+      - name: Both installers carry the same key
+        run: |
+          sh_key=$(sed -n 's/^PUBKEY="\(.*\)"$/\1/p' install.sh)
+          ps_key=$(sed -n "s/^\$PubKey = '\(.*\)'\$/\1/p" install.ps1)
+          sh_ns=$(sed -n 's/^NAMESPACE="\(.*\)"$/\1/p' install.sh)
+          ps_ns=$(sed -n "s/^\$Namespace = '\(.*\)'\$/\1/p" install.ps1)
+          [ -n "$sh_key" ] && [ "$sh_key" = "$ps_key" ] && [ "$sh_ns" = "$ps_ns" ] ||
+            { echo "install.sh and install.ps1 disagree on the release key"; exit 1; }
+      - name: install.ps1 parses
+        shell: pwsh
+        run: |
+          $errors = $null
+          [Management.Automation.Language.Parser]::ParseFile("$PWD/install.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors; exit 1 }
       - run: cargo test --locked --workspace --lib --bins --tests
 
   build:
@@ -31,25 +52,26 @@ jobs:
     strategy:
       matrix:
         include:
-          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest }
-          - { target: aarch64-unknown-linux-musl, os: ubuntu-latest }
-          - { target: x86_64-apple-darwin, os: macos-latest }
-          - { target: aarch64-apple-darwin, os: macos-latest }
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest, ext: tar.gz }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-latest, ext: tar.gz }
+          - { target: x86_64-apple-darwin, os: macos-latest, ext: tar.gz }
+          - { target: aarch64-apple-darwin, os: macos-latest, ext: tar.gz }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest, ext: zip }
+          - { target: aarch64-pc-windows-msvc, os: windows-latest, ext: zip }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
       - run: scripts/package.sh ${{ matrix.target }}
+        shell: bash
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}
-          path: dist/chess-${{ matrix.target }}.tar.gz
+          path: dist/chess-${{ matrix.target }}.${{ matrix.ext }}
           if-no-files-found: error
 
-  release:
+  sign:
     needs: build
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
@@ -61,7 +83,7 @@ jobs:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
         run: |
           cd dist
-          sha256sum chess-*.tar.gz > SHA256SUMS
+          sha256sum chess-*.tar.gz chess-*.zip > SHA256SUMS
           cat SHA256SUMS
           key=$(mktemp)
           printf '%s\n' "$RELEASE_SIGNING_KEY" > "$key"
@@ -72,9 +94,67 @@ jobs:
         run: |
           CHESS_DOWNLOAD_URL="file://$PWD/dist" CHESS_INSTALL_DIR="$RUNNER_TEMP/bin" sh install.sh
           "$RUNNER_TEMP/bin/chess-tui" --version
+      - uses: actions/upload-artifact@v7
+        with:
+          name: signed
+          path: dist/*
+          if-no-files-found: error
+
+  install-windows:
+    needs: sign
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: signed
+          path: dist
+      # Windows PowerShell 5.1, the oldest the script supports, with spaces in
+      # the temporary and install folders. The second run, as `irm | iex`
+      # would, updates the copy the first one installed.
+      - name: Install with install.ps1 from the signed files
+        shell: powershell
+        run: |
+          $env:TMP = "$env:RUNNER_TEMP\t m p"
+          New-Item -ItemType Directory -Force -Path $env:TMP | Out-Null
+          $env:CHESS_DOWNLOAD_URL = ([Uri]"$PWD\dist").AbsoluteUri
+          $env:CHESS_INSTALL_DIR = "$env:RUNNER_TEMP\chess bin"
+          $env:CHESS_NO_MODIFY_PATH = '1'
+          powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Get-Content -Raw install.ps1 | Invoke-Expression
+          & "$env:CHESS_INSTALL_DIR\chess-tui.exe" --version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: install.ps1 refuses an altered archive
+        shell: powershell
+        run: |
+          $zip = "$PWD\dist\chess-x86_64-pc-windows-msvc.zip"
+          $bytes = [IO.File]::ReadAllBytes($zip)
+          $bytes[100] = $bytes[100] -bxor 1
+          [IO.File]::WriteAllBytes($zip, $bytes)
+          $env:CHESS_DOWNLOAD_URL = ([Uri]"$PWD\dist").AbsoluteUri
+          $env:CHESS_INSTALL_DIR = "$env:RUNNER_TEMP\refused"
+          $env:CHESS_NO_MODIFY_PATH = '1'
+          powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
+          if ($LASTEXITCODE -eq 0) { echo 'the altered archive was installed'; exit 1 }
+          if (Test-Path "$env:CHESS_INSTALL_DIR\chess-tui.exe") { exit 1 }
+          exit 0
+
+  release:
+    needs: install-windows
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: signed
+          path: dist
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp install.sh dist/
+          cp install.sh install.ps1 dist/
           gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes
