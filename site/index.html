@@ -21,12 +21,21 @@
   a { color: var(--accent); }
   img { max-width: 100%; border-radius: 6px; border: 1px solid var(--edge); margin: 1rem 0 2rem; }
   li { margin: .25rem 0; }
+  .note { border-left: 3px solid var(--accent); background: var(--box); border-radius: 0 6px 6px 0;
+          padding: .75rem 1rem; margin: 0 0 2rem; }
+  .note p { margin: 0; }
+  .note p + p { margin-top: .5rem; }
 </style>
 </head>
 <body>
 <main>
   <h1>♚ Terminal Chess</h1>
   <p class="tag">Two-player chess in the terminal, peer to peer. Both players' programs check every move; no server referees the game.</p>
+
+  <div class="note">
+    <p><strong>Online play is not live yet.</strong> The server that introduces two players over the internet isn't deployed; I'm still working out where and how to host it. Offline games on one computer, and games between two computers on the same local network, work today.</p>
+    <p>Ideas on hosting, or any other feedback, are welcome: <a href="https://github.com/sudhanshu19102003/chess/issues">open an issue on GitHub</a>.</p>
+  </div>
 
   <p>Install on macOS or Linux (x86_64 or ARM):</p>
   <pre>curl -fsSL https://chess.thesudhanshu.dev/install.sh | sh</pre>
