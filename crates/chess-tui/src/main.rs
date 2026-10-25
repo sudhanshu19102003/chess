@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use chess_net::connect::Servers;
-use chess_tui::{app::App, net::Net, render::Renderer};
+use chess_tui::{app::App, engine::Engine, net::Net, render::Renderer};
 use ratatui::crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event},
     execute, terminal,
@@ -53,6 +53,7 @@ fn main() -> std::io::Result<()> {
     let mut app = App::new(Instant::now());
     app.server = servers.rendezvous.clone();
     let mut net = Net::new(servers)?;
+    let mut engine = Engine::new();
     app.hires = chess_tui::octants_supported();
     let mut terminal = ratatui::init();
     // Taking the mouse also stops the terminal selecting text on a click or
@@ -72,10 +73,16 @@ fn main() -> std::io::Result<()> {
             for event in net.poll() {
                 app.on_net(event, Instant::now());
             }
+            for event in engine.poll() {
+                app.on_engine(event, Instant::now());
+            }
             let now = Instant::now();
             app.tick(now);
             for request in app.requests.drain(..) {
                 net.request(request);
+            }
+            for request in app.engine_requests.drain(..) {
+                engine.request(request);
             }
             terminal.draw(|f| renderer.draw(f, &app, now))?;
             if event::poll(FRAME)? {
@@ -89,12 +96,16 @@ fn main() -> std::io::Result<()> {
             for request in app.requests.drain(..) {
                 net.request(request);
             }
+            for request in app.engine_requests.drain(..) {
+                engine.request(request);
+            }
             if let Some(text) = app.clipboard.take() {
                 app.copied = Some((Instant::now(), chess_tui::clipboard::copy(&text)));
             }
         }
         Ok(())
     })();
+    drop(engine);
     _ = execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
     result

@@ -112,12 +112,13 @@ fn the_home_screen_counts_down_then_starts_whites_clock() {
     let t0 = Instant::now();
     let mut app = App::new(t0);
     assert_eq!(app.screen, Screen::Home);
-    // Modes not built yet only show a note.
+    // VS COMPUTER opens its setup first; Esc comes back.
     app.on_key(KeyEvent::from(KeyCode::Up), t0);
     assert_eq!(app.mode, Mode::Computer);
     app.on_key(KeyEvent::from(KeyCode::Enter), t0);
+    assert_eq!(app.screen, Screen::Setup);
+    app.on_key(KeyEvent::from(KeyCode::Esc), t0);
     assert_eq!(app.screen, Screen::Home);
-    assert!(app.notice_showing(t0));
     app.on_key(KeyEvent::from(KeyCode::Down), t0);
     app.on_key(KeyEvent::from(KeyCode::Enter), t0);
     assert_eq!(app.screen, Screen::Countdown { go: t0 + COUNTDOWN });
@@ -381,4 +382,90 @@ fn with_auto_flip_a_new_game_starts_from_whites_side() {
     assert_eq!(app.screen, Screen::Home);
     press(&mut app, KeyCode::Enter);
     assert!(!app.flipped);
+}
+
+/// A VS COMPUTER game up to the end of its countdown, the engine ready.
+fn versus(colour_presses: usize) -> (App, Instant) {
+    use chess_tui::app::{COUNTDOWN, Mode};
+    use chess_tui::engine::{Event, Request};
+    let t0 = Instant::now();
+    let mut app = App::new(t0);
+    app.mode = Mode::Computer;
+    app.on_key(KeyEvent::from(KeyCode::Enter), t0);
+    assert_eq!(app.screen, Screen::Setup);
+    assert_eq!(std::mem::take(&mut app.engine_requests), [Request::Prepare]);
+    // Not ready yet: Enter waits.
+    app.on_key(KeyEvent::from(KeyCode::Enter), t0);
+    assert_eq!(app.screen, Screen::Setup);
+    app.on_engine(Event::Progress { got: 10, total: 80 }, t0);
+    app.on_engine(Event::Ready { name: "Stockfish 19".into() }, t0);
+    app.on_key(KeyEvent::from(KeyCode::Char('2')), t0);
+    app.on_key(KeyEvent::from(KeyCode::Down), t0);
+    for _ in 0..colour_presses {
+        app.on_key(KeyEvent::from(KeyCode::Right), t0);
+    }
+    app.on_key(KeyEvent::from(KeyCode::Enter), t0);
+    assert!(matches!(app.screen, Screen::Countdown { .. }));
+    let go = t0 + COUNTDOWN;
+    app.tick(go);
+    (app, go)
+}
+
+#[test]
+fn the_computer_answers_the_players_moves() {
+    use chess_tui::engine::{Event, Request};
+    let (mut app, go) = versus(0);
+    assert_eq!(app.versus.as_ref().unwrap().human, Color::White);
+    assert_eq!(app.versus.as_ref().unwrap().level, 1);
+    assert!(app.engine_requests.is_empty(), "White moves first");
+    assert!(app.play_uci("e2e4", go));
+    // The computer's pieces are not the player's.
+    app.cursor = sq("e7");
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.selected, None);
+    // Asked once the piece has landed.
+    let later = go + std::time::Duration::from_secs(1);
+    app.tick(later);
+    app.tick(later);
+    let think = match std::mem::take(&mut app.engine_requests).as_slice() {
+        [Request::Think(t)] => t.clone(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(think.moves, ["e2e4"]);
+    assert!(think.new_game);
+    // A stale or illegal answer is not played.
+    app.on_engine(Event::Move { id: think.id + 1, uci: "e7e5".into() }, later);
+    assert_eq!(app.history.len(), 1);
+    app.on_engine(Event::Move { id: think.id, uci: "e7e5".into() }, later);
+    assert_eq!(app.history.len(), 2);
+    assert_eq!(app.history[1].san, "e5");
+    assert!(app.play_uci("g1f3", later));
+}
+
+#[test]
+fn playing_black_the_computer_opens_and_the_board_turns() {
+    use chess_tui::engine::{Event, Request};
+    let (mut app, go) = versus(1);
+    assert_eq!(app.versus.as_ref().unwrap().human, Color::Black);
+    assert!(app.flipped);
+    let id = match std::mem::take(&mut app.engine_requests).as_slice() {
+        [Request::Think(t)] => t.id,
+        other => panic!("{other:?}"),
+    };
+    assert!(!app.play_uci("e2e4", go), "not the player's pieces");
+    app.on_engine(Event::Move { id, uci: "d2d4".into() }, go);
+    assert!(app.play_uci("d7d5", go));
+    // Leaving stops the search.
+    app.on_key(KeyEvent::from(KeyCode::Char('r')), go);
+    assert_eq!(app.screen, Screen::Home);
+    assert!(app.engine_requests.contains(&Request::Stop));
+}
+
+#[test]
+fn an_engine_failure_stops_the_game() {
+    use chess_tui::engine::Event;
+    let (mut app, go) = versus(0);
+    app.on_engine(Event::Failed("Stockfish stopped unexpectedly".into()), go);
+    assert!(app.over());
+    assert!(!app.play_uci("e2e4", go));
 }

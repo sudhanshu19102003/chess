@@ -82,7 +82,7 @@ impl Renderer {
             }
         };
 
-        if matches!(app.screen, Screen::Home | Screen::Lobby) {
+        if matches!(app.screen, Screen::Home | Screen::Lobby | Screen::Setup) {
             self.home(frame, app, now);
             return;
         }

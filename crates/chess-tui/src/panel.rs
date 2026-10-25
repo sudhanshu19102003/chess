@@ -9,9 +9,10 @@ use chess_net::Via;
 use chess_verify::Signal;
 use chess_net::connect::Stage;
 
-use crate::app::{self, App, Lobby, Mode, MoveRecord, Pick, Screen};
+use crate::app::{self, App, EngineStatus, Lobby, Mode, MoveRecord, Pick, Screen, Setting};
 use crate::canvas::{Canvas, Rgb, rgb};
 use crate::clock;
+use crate::engine;
 use crate::layout::{self, BoardGeom, Cells};
 use crate::render::Text;
 use crate::theme::*;
@@ -19,6 +20,8 @@ use crate::theme::*;
 
 /// Rows of the box about a network game.
 const ONLINE_H: i32 = 8;
+/// Rows of the box about a game against the computer.
+const VERSUS_H: i32 = 5;
 /// Rows of the box for a typed move: the input and the suggestions.
 const INPUT_H: i32 = 5 + app::SUGGESTIONS as i32;
 
@@ -33,6 +36,7 @@ struct Sections {
     input: Option<i32>,
     actions: Option<i32>,
     online: Option<i32>,
+    versus: Option<i32>,
     help: i32,
 }
 
@@ -45,10 +49,11 @@ fn sections(app: &App, r: Cells, help_rows: i32) -> Sections {
         })
     };
     let online = take(app.online.is_some(), ONLINE_H);
+    let versus = take(app.versus.is_some(), VERSUS_H);
     let actions = take(!app.over(), ACTIONS_H);
     let input = take(app.input.is_some(), INPUT_H);
     let history_h = y - r.y;
-    Sections { history_h, input, actions, online, help: r.y + r.h - help_rows }
+    Sections { history_h, input, actions, online, versus, help: r.y + r.h - help_rows }
 }
 
 pub fn draw(cv: &mut Canvas, out: &mut Vec<Text>, app: &App, r: Cells, now: Instant) {
@@ -63,6 +68,9 @@ pub fn draw(cv: &mut Canvas, out: &mut Vec<Text>, app: &App, r: Cells, now: Inst
     }
     if let Some(y) = at.online {
         online(cv, out, app, r.x, y, r.w, ONLINE_H);
+    }
+    if let Some(y) = at.versus {
+        versus(cv, out, app, r.x, y, r.w, VERSUS_H, now);
     }
     for (i, line) in help.iter().enumerate() {
         put_spans(out, r.x + 1, at.help + i as i32, line);
@@ -212,6 +220,10 @@ pub enum HomeHit {
     Copy,
     /// Auto flip, on the home screen.
     AutoFlip,
+    /// A VS COMPUTER setting: true for the next value, false for the previous.
+    Setting(Setting, bool),
+    /// The VS COMPUTER play button.
+    Play,
 }
 
 /// What the cell (`col`, `row`) of a `w` x `h` window is on the home screen
@@ -241,6 +253,14 @@ pub fn home_hit(app: &App, w: i32, h: i32, col: i32, row: i32) -> Option<HomeHit
             .find(|&i| button(i as i32))
             .map(|i| HomeHit::Pick(Pick::ALL[i]))
             .or_else(|| if *pick == Pick::Join { None } else { time(y + HOME_TIME_ROW) }),
+        (Screen::Setup, _) => SETUP_ROWS
+            .into_iter()
+            .find_map(|(setting, srow)| {
+                let len: i32 = setting_spans(app, setting).iter().map(|(s, _, _)| s.chars().count() as i32).sum();
+                let start = x + (HOME_W - len) / 2;
+                (row == y + srow && (start..start + len).contains(&col)).then(|| HomeHit::Setting(setting, col >= start + len / 2))
+            })
+            .or_else(|| inside(x + (HOME_W - PLAY_W) / 2, y + PLAY_ROW, PLAY_W, 3).then_some(HomeHit::Play)),
         (Screen::Lobby, Lobby::Connecting { code: Some(_), .. }) => {
             let on_box = inside(x + CODE_BOX.0, y + CODE_ROW, CODE_BOX.1, 3);
             (on_box || inside(x + COPY_BUTTON.0, y + CODE_ROW, COPY_BUTTON.1, 3)).then_some(HomeHit::Copy)
@@ -279,21 +299,23 @@ pub fn home(cv: &mut Canvas, out: &mut Vec<Text>, app: &App, w: i32, h: i32, now
         centred(out, x, HOME_W, y + 5, "play a friend", TEXT_DIM);
         return lobby(cv, out, app, x, y, now, t);
     }
+    if app.screen == Screen::Setup {
+        centred(out, x, HOME_W, y + 5, "play the computer", TEXT_DIM);
+        return setup(cv, out, app, x, y, t);
+    }
     centred(out, x, HOME_W, y + 5, "choose a game", TEXT_DIM);
 
     // The chosen button glows brighter and dimmer, like an arcade "press start".
     let pulse = 0.75 + 0.25 * (t * 3.0).sin();
     for (i, mode) in Mode::ALL.into_iter().enumerate() {
-        button(cv, out, x, y + BUTTONS_ROW + 4 * i as i32, mode.name(), mode == app.mode, mode.available(), pulse);
+        button(cv, out, x, y + BUTTONS_ROW + 4 * i as i32, mode.name(), mode == app.mode, pulse);
     }
     centred_spans(out, x, HOME_W, y + HOME_TIME_ROW, &time_spans(app));
     if app.mode == Mode::Offline {
         centred_spans(out, x, HOME_W, y + HOME_FLIP_ROW, &flip_spans(app));
     }
 
-    if app.notice_showing(now) {
-        centred(out, x, HOME_W, y + 22, &format!("{} is not built yet", app.mode.name()), ALARM_TOP);
-    } else if let Some(why) = &app.drawn {
+    if let Some(why) = &app.drawn {
         centred(out, x, HOME_W, y + 22, "LAST GAME DRAWN", ALARM_TOP);
         for (i, line) in wrap(why, HOME_W as usize - 6).iter().take(2).enumerate() {
             centred(out, x, HOME_W, y + 23 + i as i32, line, TEXT_DIM);
@@ -305,19 +327,14 @@ pub fn home(cv: &mut Canvas, out: &mut Vec<Text>, app: &App, w: i32, h: i32, now
 
 /// One menu button, centred in the home box, glowing when chosen.
 #[allow(clippy::too_many_arguments)]
-fn button(cv: &mut Canvas, out: &mut Vec<Text>, x: i32, by: i32, name: &str, chosen: bool, available: bool, pulse: f32) {
+fn button(cv: &mut Canvas, out: &mut Vec<Text>, x: i32, by: i32, name: &str, chosen: bool, pulse: f32) {
     let (bw, bx) = (BUTTON_W, x + (HOME_W - BUTTON_W) / 2);
     bevel_box(cv, bx, by, bw, 3, chosen.then(|| AMBER.scale(pulse)));
-    let (label, colour) = match (chosen, available) {
-        (true, true) => (format!("▶ {name}"), AMBER_TOP.scale(pulse)),
-        (true, false) => (format!("▶ {name}"), TEXT),
-        (false, true) => (name.to_string(), TEXT),
-        (false, false) => (name.to_string(), TEXT_DIM),
+    let (label, colour) = match chosen {
+        true => (format!("▶ {name}"), AMBER_TOP.scale(pulse)),
+        false => (name.to_string(), TEXT),
     };
     out.push(Text::new(bx + 3, by + 1, label, colour).bold());
-    if !available {
-        out.push(Text::new(bx + bw - 7, by + 1, "SOON", TEXT_FAINT));
-    }
 }
 
 /// A help line of keys and what they do.
@@ -356,13 +373,95 @@ fn wrap(s: &str, w: usize) -> Vec<String> {
     lines
 }
 
+/// The VS COMPUTER settings and the row each is on in the home box.
+const SETUP_ROWS: [(Setting, i32); 3] = [(Setting::Level, 8), (Setting::Colour, 11), (Setting::Time, 13)];
+/// The play button: its row and width.
+const PLAY_ROW: i32 = 15;
+const PLAY_W: i32 = 20;
+
+/// A VS COMPUTER setting with arrows to change it; bright when it has the
+/// focus.
+fn setting_spans(app: &App, setting: Setting) -> Spans {
+    let (name, value) = match setting {
+        Setting::Level => ("LEVEL  ", format!("{} of {}", app.setup.level + 1, engine::LEVELS.len())),
+        Setting::Colour => ("PLAY AS  ", app.setup.colour.name().to_string()),
+        _ => ("TIME  ", time_control(app)),
+    };
+    let focus = app.setup.focus == setting;
+    let arrows = if focus { AMBER } else { TEXT_FAINT };
+    vec![
+        (name.into(), TEXT_DIM, false),
+        ("◀ ".into(), arrows, true),
+        (value, if focus { AMBER_TOP } else { TEXT }, true),
+        (" ▶".into(), arrows, true),
+    ]
+}
+
+/// The VS COMPUTER setup, inside the home box from row 8 down: level,
+/// colour and time, the play button, and how Stockfish is getting on (its
+/// download the first time).
+fn setup(cv: &mut Canvas, out: &mut Vec<Text>, app: &App, x: i32, y: i32, t: f32) {
+    let pulse = 0.75 + 0.25 * (t * 3.0).sin();
+    for (setting, row) in SETUP_ROWS {
+        centred_spans(out, x, HOME_W, y + row, &setting_spans(app, setting));
+    }
+    let level = engine::LEVELS[app.setup.level.min(engine::LEVELS.len() - 1)];
+    centred(out, x, HOME_W, y + 9, level.name, TEXT_FAINT);
+
+    let ready = matches!(app.engine, EngineStatus::Ready { .. });
+    let focus = app.setup.focus == Setting::Play;
+    let bx = x + (HOME_W - PLAY_W) / 2;
+    bevel_box(cv, bx, y + PLAY_ROW, PLAY_W, 3, (focus && ready).then(|| AMBER.scale(pulse)));
+    let (label, colour) = match (ready, focus) {
+        (true, true) => ("▶ PLAY", AMBER_TOP.scale(pulse)),
+        (true, false) => ("PLAY", TEXT),
+        (false, _) => ("PLAY", TEXT_FAINT),
+    };
+    centred(out, bx, PLAY_W, y + PLAY_ROW + 1, label, colour);
+
+    let spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'][(t * 10.0) as usize % 10];
+    let help = match &app.engine {
+        EngineStatus::Unknown | EngineStatus::Starting => {
+            centred(out, x, HOME_W, y + 20, &format!("{spinner} starting Stockfish…"), AMBER);
+            keys(&[("↑↓", "choose"), ("←→", "change"), ("ESC", "back")])
+        }
+        EngineStatus::Downloading { got, total } => {
+            centred(out, x, HOME_W, y + 19, &format!("{spinner} DOWNLOADING {}", engine::NAME.to_uppercase()), AMBER);
+            // A sunken bar, filled in amber as the download comes in.
+            let (bw, bx) = (34, x + (HOME_W - 34) / 2);
+            let k = cv.scale();
+            let (px, py, pw, ph) = (bx * k, 2 * (y + 21) * k, bw * k, 2 * k);
+            cv.fill_rect(px - k, py - k, pw + 2 * k, ph + 2 * k, PANEL_OUTLINE);
+            cv.fill_rect(px, py, pw, ph, SHADOW);
+            let done = (pw as u64 * got / (*total).max(1)).min(pw as u64) as i32;
+            cv.fill_rect(px, py, done, ph / 2, AMBER_TOP);
+            cv.fill_rect(px, py + ph / 2, done, ph - ph / 2, AMBER_BOTTOM);
+            let mb = |b: u64| b / 1_000_000;
+            centred(out, x, HOME_W, y + 23, &format!("{} of {} MB · only the first time", mb(*got), mb(*total)), TEXT_DIM);
+            keys(&[("↑↓", "choose"), ("←→", "change"), ("ESC", "back")])
+        }
+        EngineStatus::Ready { name } => {
+            centred(out, x, HOME_W, y + 20, &format!("{name} is ready"), TEXT_DIM);
+            keys(&[("↑↓", "choose"), ("←→", "change"), ("ENTER", "play"), ("ESC", "back")])
+        }
+        EngineStatus::Failed(why) => {
+            centred(out, x, HOME_W, y + 19, "COULD NOT GET STOCKFISH", ALARM_TOP);
+            for (i, line) in wrap(why, HOME_W as usize - 6).iter().take(5).enumerate() {
+                centred(out, x, HOME_W, y + 20 + i as i32, line, TEXT_DIM);
+            }
+            keys(&[("ENTER", "try again"), ("ESC", "back")])
+        }
+    };
+    centred_spans(out, x, HOME_W, y + HOME_H - 2, &help);
+}
+
 /// The peer-to-peer lobby, inside the home box from row 8 down.
 fn lobby(cv: &mut Canvas, out: &mut Vec<Text>, app: &App, x: i32, y: i32, now: Instant, t: f32) {
     let pulse = 0.75 + 0.25 * (t * 3.0).sin();
     let help = match &app.lobby {
         Lobby::Choose { pick } => {
             for (i, p) in Pick::ALL.into_iter().enumerate() {
-                button(cv, out, x, y + BUTTONS_ROW + 4 * i as i32, p.name(), p == *pick, true, pulse);
+                button(cv, out, x, y + BUTTONS_ROW + 4 * i as i32, p.name(), p == *pick, pulse);
             }
             if *pick == Pick::Join {
                 centred(out, x, HOME_W, y + HOME_TIME_ROW, "the host chooses the time", TEXT_FAINT);
@@ -507,6 +606,33 @@ fn online(cv: &mut Canvas, out: &mut Vec<Text>, app: &App, x: i32, y: i32, w: i3
     }
 }
 
+/// The box about a game against the computer: the level, the colours, and
+/// whether it is thinking or has failed.
+#[allow(clippy::too_many_arguments)]
+fn versus(cv: &mut Canvas, out: &mut Vec<Text>, app: &App, x: i32, y: i32, w: i32, h: i32, now: Instant) {
+    let Some(v) = &app.versus else { return };
+    bevel_box(cv, x, y, w, h, v.error.is_some().then_some(ALARM_BOTTOM));
+    out.push(Text::new(x + 2, y + 1, "VS COMPUTER", AMBER).bold());
+    let level = engine::LEVELS[v.level.min(engine::LEVELS.len() - 1)];
+    let tag = format!("level {} · {}", v.level + 1, level.name);
+    out.push(Text::new(x + w - 3 - tag.chars().count() as i32, y + 1, tag, TEXT_DIM));
+    let name = match &app.engine {
+        EngineStatus::Ready { name } => name.as_str(),
+        _ => "Stockfish",
+    };
+    out.push(Text::new(x + 2, y + 2, format!("you play {} against {name}", v.human.name()), TEXT));
+    if let Some(why) = &v.error {
+        let message = format!("GAME STOPPED: {why}");
+        for (i, line) in wrap(&message, (w - 4) as usize).iter().take((h - 3) as usize).enumerate() {
+            out.push(Text::new(x + 2, y + 3 + i as i32, line.clone(), ALARM_TOP));
+        }
+    } else if v.asked.is_some() && !app.over() {
+        let t = now.saturating_duration_since(app.started).as_secs_f32();
+        let spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'][(t * 10.0) as usize % 10];
+        out.push(Text::new(x + 2, y + 3, format!("{spinner} thinking…"), AMBER));
+    }
+}
+
 /// Big pixel digits for the countdown, 5x7, one string per row.
 fn glyph(n: u64) -> [&'static str; 7] {
     match n {
@@ -527,8 +653,8 @@ pub fn countdown_popup(cv: &mut Canvas, out: &mut Vec<Text>, app: &App, g: &Boar
     let x = g.x + (g.outer() - w) / 2;
     let y = (g.y + g.outer() / 2) / 2 - h / 2;
     bevel_box(cv, x, y, w, h, None);
-    let title = match &app.online {
-        Some(o) => format!("YOU PLAY {}", o.me().name()),
+    let title = match app.me() {
+        Some(me) => format!("YOU PLAY {}", me.name()),
         None => app.mode.name().to_string(),
     };
     centred(out, x, w, y + 1, &title, AMBER);
@@ -599,6 +725,8 @@ pub fn strip(cv: &mut Canvas, out: &mut Vec<Text>, app: &App, side: Side, r: Cel
         Some((if blink { "● CHECK" } else { "  CHECK" }, ALARM_TOP))
     } else if app.draw_offer == Some(side) {
         Some(("DRAW OFFER", AMBER))
+    } else if live && app.versus.as_ref().is_some_and(|v| v.human != side) {
+        Some((if blink { "● THINKING" } else { "  THINKING" }, AMBER))
     } else if live {
         Some((if blink { "● TO MOVE" } else { "  TO MOVE" }, AMBER))
     } else if turn && clock.paused() {
@@ -691,6 +819,7 @@ type Spans = Vec<(String, Rgb, bool)>;
 
 fn help_lines(app: &App, w: i32) -> Vec<Spans> {
     let online = app.online.is_some();
+    let versus = app.versus.is_some();
     if app.input.is_some() {
         return vec![keys(&[("↑↓", "choose"), ("ENTER", "play"), ("ESC", "cancel")])];
     }
@@ -712,7 +841,7 @@ fn help_lines(app: &App, w: i32) -> Vec<Spans> {
     let mut lines = Vec::new();
     let mut line: Spans = Vec::new();
     let mut len = 0;
-    for (key, desc) in keys.into_iter().filter(|&(k, _)| !(online && (k == "P" || k == "A"))) {
+    for (key, desc) in keys.into_iter().filter(|&(k, _)| !(online && (k == "P" || k == "A")) && !(versus && (k == "A" || k == "D"))) {
         let item = key.chars().count() as i32 + 1 + desc.len() as i32;
         if len > 0 && len + 2 + item > w {
             lines.push(std::mem::take(&mut line));
