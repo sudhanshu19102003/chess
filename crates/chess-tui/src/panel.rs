@@ -199,9 +199,84 @@ fn flip_spans(app: &App) -> Spans {
 /// three buttons, and of auto flip on the home screen (offline only).
 const HOME_TIME_ROW: i32 = 20;
 const HOME_FLIP_ROW: i32 = 21;
-/// Width of a menu button, and the row of the first one.
-const BUTTON_W: i32 = 30;
+/// A menu button: its column from the home box's left edge, its width, and
+/// the row of the first one. Its icon sits in the gap to its left, from
+/// column `ICON_X`, so icon and button together are centred.
+const BUTTON_X: i32 = 14;
+const BUTTON_W: i32 = 28;
 const BUTTONS_ROW: i32 = 8;
+const ICON_X: i32 = 4;
+
+/// A menu icon, 8 x 7 pixels: `#` is the main colour, `+` light, `-` dark,
+/// a space clear. Its top is level with its 3-row button's.
+type Icon = [&'static str; 7];
+
+/// Offline: a board between two players at one keyboard.
+const BOARD: Icon = [
+    "########",
+    "#++--++#",
+    "#++--++#",
+    "#--++--#",
+    "#--++--#",
+    "#++--++#",
+    "########",
+];
+/// Peer to peer, and hosting online: the world.
+const GLOBE: Icon = [
+    "  ###   ",
+    " #+#-#  ",
+    "#+-#--# ",
+    "####### ",
+    "#--#--# ",
+    " #-#-#  ",
+    "  ###   ",
+];
+/// The computer opponent.
+const ROBOT: Icon = [
+    "   ##   ",
+    " ###### ",
+    "#-+--+-#",
+    "#------#",
+    "#-####-#",
+    "#------#",
+    " ###### ",
+];
+/// Hosting on the local network: Wi-Fi.
+const WIFI: Icon = [
+    " ###### ",
+    "#      #",
+    "  ####  ",
+    " #    # ",
+    "   ##   ",
+    "   ##   ",
+    "        ",
+];
+/// Joining with a code.
+const KEY: Icon = [
+    "        ",
+    " ##     ",
+    "#+-#    ",
+    "#--#####",
+    "#--# # #",
+    " ##     ",
+    "        ",
+];
+
+fn mode_icon(mode: Mode) -> &'static Icon {
+    match mode {
+        Mode::Offline => &BOARD,
+        Mode::PeerToPeer => &GLOBE,
+        Mode::Computer => &ROBOT,
+    }
+}
+
+fn pick_icon(pick: Pick) -> &'static Icon {
+    match pick {
+        Pick::Host => &GLOBE,
+        Pick::HostLan => &WIFI,
+        Pick::Join => &KEY,
+    }
+}
 /// The game code's box and the copy button beside it, in the lobby: from
 /// the home box's left edge, and their width.
 const CODE_BOX: (i32, i32) = (3, 28);
@@ -231,7 +306,8 @@ pub enum HomeHit {
 pub fn home_hit(app: &App, w: i32, h: i32, col: i32, row: i32) -> Option<HomeHit> {
     let (x, y) = home_origin(w, h);
     let inside = |bx: i32, by: i32, bw: i32, bh: i32| (bx..bx + bw).contains(&col) && (by..by + bh).contains(&row);
-    let button = |i: i32| inside(x + (HOME_W - BUTTON_W) / 2, y + BUTTONS_ROW + 4 * i, BUTTON_W, 3);
+    // A button's icon counts as the button.
+    let button = |i: i32| inside(x + ICON_X, y + BUTTONS_ROW + 4 * i, BUTTON_X + BUTTON_W - ICON_X, 3);
     // The arrows and the name between them: the left half goes back.
     let time = |trow: i32| {
         let len: i32 = time_spans(app).iter().map(|(s, _, _)| s.chars().count() as i32).sum();
@@ -308,7 +384,8 @@ pub fn home(cv: &mut Canvas, out: &mut Vec<Text>, app: &App, w: i32, h: i32, now
     // The chosen button glows brighter and dimmer, like an arcade "press start".
     let pulse = 0.75 + 0.25 * (t * 3.0).sin();
     for (i, mode) in Mode::ALL.into_iter().enumerate() {
-        button(cv, out, x, y + BUTTONS_ROW + 4 * i as i32, mode.name(), mode == app.mode, pulse);
+        let by = y + BUTTONS_ROW + 4 * i as i32;
+        button(cv, out, x, by, mode.name(), mode_icon(mode), mode == app.mode, pulse);
     }
     centred_spans(out, x, HOME_W, y + HOME_TIME_ROW, &time_spans(app));
     if app.mode == Mode::Offline {
@@ -325,16 +402,46 @@ pub fn home(cv: &mut Canvas, out: &mut Vec<Text>, app: &App, w: i32, h: i32, now
     centred_spans(out, x, HOME_W, y + HOME_H - 2, &help);
 }
 
-/// One menu button, centred in the home box, glowing when chosen.
+/// One menu button with its icon, glowing when chosen.
 #[allow(clippy::too_many_arguments)]
-fn button(cv: &mut Canvas, out: &mut Vec<Text>, x: i32, by: i32, name: &str, chosen: bool, pulse: f32) {
-    let (bw, bx) = (BUTTON_W, x + (HOME_W - BUTTON_W) / 2);
+fn button(cv: &mut Canvas, out: &mut Vec<Text>, x: i32, by: i32, name: &str, art: &Icon, chosen: bool, pulse: f32) {
+    icon(cv, x + ICON_X, by, art, chosen, pulse);
+    let (bw, bx) = (BUTTON_W, x + BUTTON_X);
     bevel_box(cv, bx, by, bw, 3, chosen.then(|| AMBER.scale(pulse)));
     let (label, colour) = match chosen {
         true => (format!("▶ {name}"), AMBER_TOP.scale(pulse)),
         false => (name.to_string(), TEXT),
     };
     out.push(Text::new(bx + 3, by + 1, label, colour).bold());
+}
+
+/// A menu icon at column `x`, beside the button on row `by`, with a shadow
+/// like the button's. Amber when its button is chosen.
+fn icon(cv: &mut Canvas, x: i32, by: i32, art: &Icon, chosen: bool, pulse: f32) {
+    let (main, light, dark) = if chosen {
+        (AMBER.scale(pulse), AMBER_TOP.scale(pulse), AMBER_BOTTOM.scale(0.6 * pulse))
+    } else {
+        (IDLE_TOP, TEXT, IDLE_BOTTOM.scale(0.7))
+    };
+    let k = cv.scale();
+    let (px, py) = (x * k, 2 * by * k);
+    let pixels = || {
+        art.iter().enumerate().flat_map(|(j, row)| row.chars().enumerate().map(move |(i, ch)| (i as i32, j as i32, ch)))
+    };
+    for (i, j, ch) in pixels() {
+        if ch != ' ' {
+            cv.blend_rect(px + (i + 1) * k, py + (j + 1) * k, k, k, SHADOW, 0.6);
+        }
+    }
+    for (i, j, ch) in pixels() {
+        let colour = match ch {
+            '#' => main,
+            '+' => light,
+            '-' => dark,
+            _ => continue,
+        };
+        cv.fill_rect(px + i * k, py + j * k, k, k, colour);
+    }
 }
 
 /// A help line of keys and what they do.
@@ -461,7 +568,7 @@ fn lobby(cv: &mut Canvas, out: &mut Vec<Text>, app: &App, x: i32, y: i32, now: I
     let help = match &app.lobby {
         Lobby::Choose { pick } => {
             for (i, p) in Pick::ALL.into_iter().enumerate() {
-                button(cv, out, x, y + BUTTONS_ROW + 4 * i as i32, p.name(), p == *pick, pulse);
+                button(cv, out, x, y + BUTTONS_ROW + 4 * i as i32, p.name(), pick_icon(p), p == *pick, pulse);
             }
             if *pick == Pick::Join {
                 centred(out, x, HOME_W, y + HOME_TIME_ROW, "the host chooses the time", TEXT_FAINT);
