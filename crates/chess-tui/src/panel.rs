@@ -9,8 +9,8 @@ use chess_net::Via;
 use chess_verify::Signal;
 use chess_net::connect::Stage;
 
-use crate::app::{self, App, EngineStatus, Lobby, Mode, MoveRecord, Pick, Screen, Setting};
-use crate::canvas::{Canvas, Rgb, rgb};
+use crate::app::{self, App, EndChoice, EngineStatus, Lobby, Mode, MoveRecord, Pick, Screen, Setting};
+use crate::canvas::{Canvas, Rgb, hash, rgb};
 use crate::clock;
 use crate::engine;
 use crate::layout::{self, BoardGeom, Cells};
@@ -788,6 +788,159 @@ pub fn countdown_popup(cv: &mut Canvas, out: &mut Vec<Text>, app: &App, g: &Boar
         }
     }
     centred_spans(out, x, w, y + h - 2, &keys(&[("ESC", "back to menu")]));
+}
+
+/// The game-over pop-up, `END_W` x `END_H` cells centred on the board,
+/// and its two buttons: their row from the top, width, and columns from
+/// the left edge.
+const END_W: i32 = 34;
+const END_H: i32 = 19;
+const END_BUTTONS_ROW: i32 = 14;
+const END_BUTTON_W: i32 = 14;
+const END_BUTTONS: [(EndChoice, &str, i32); 2] = [(EndChoice::NewGame, "NEW GAME", 2), (EndChoice::Home, "HOME", 18)];
+
+/// The pop-up's top-left cell over the board `g`.
+fn end_origin(g: &BoardGeom) -> (i32, i32) {
+    (g.x + (g.outer() - END_W) / 2, (g.y + g.outer() / 2) / 2 - END_H / 2)
+}
+
+/// Which of the pop-up's buttons the cell (`col`, `row`) is on.
+pub fn end_hit(g: &BoardGeom, col: i32, row: i32) -> Option<EndChoice> {
+    let (x, y) = end_origin(g);
+    let row_ok = (y + END_BUTTONS_ROW..y + END_BUTTONS_ROW + 3).contains(&row);
+    END_BUTTONS
+        .into_iter()
+        .find(|&(_, _, dx)| row_ok && (x + dx..x + dx + END_BUTTON_W).contains(&col))
+        .map(|(choice, _, _)| choice)
+}
+
+/// The pop-up's pictures, drawn like the countdown's digits: `#` is the
+/// main colour, `+` light, `-` dark, a space clear.
+const TROPHY: [&str; 7] = [
+    "#########",
+    "# +###- #",
+    " #+###-# ",
+    "  #####  ",
+    "    #    ",
+    "   ###   ",
+    " ####### ",
+];
+const KING: [&str; 7] = [
+    "    #    ",
+    "   ###   ",
+    "    #    ",
+    "  #####  ",
+    "   #-#   ",
+    "   #-#   ",
+    " ####### ",
+];
+const SCALES: [&str; 7] = [
+    "    #    ",
+    "#########",
+    "#   #   #",
+    "#   #   #",
+    "### # ###",
+    "    #    ",
+    "  #####  ",
+];
+
+/// The end of a game, over the dimmed board: what happened, a picture (a
+/// trophy for a win, with confetti falling over the board; a king for a
+/// loss online; scales for a draw), and NEW GAME and HOME. Drawn after the
+/// pieces, on whatever scale the canvas has.
+pub fn end_popup(cv: &mut Canvas, out: &mut Vec<Text>, app: &App, g: &BoardGeom, now: Instant) {
+    let Some((winner, reason)) = app.result() else { return };
+    let since = app.ended_at.map_or(0.0, |at| now.saturating_duration_since(at + app::END_PAUSE).as_secs_f32());
+    let k = cv.scale();
+    let (bx, by, side) = ((g.x + g.f) * k, (g.y + g.f) * k, 8 * g.s * k);
+    cv.blend_rect(bx, by, side, side, SHADOW, 0.55);
+
+    let me = app.online.as_ref().map(|o| o.me());
+    let (headline, art, won) = match (winner, me) {
+        (None, _) => ("DRAW".to_string(), &SCALES, false),
+        (Some(w), Some(me)) if w == me => ("YOU WIN".to_string(), &TROPHY, true),
+        (Some(_), Some(_)) => ("YOU LOST".to_string(), &KING, false),
+        (Some(w), None) => (format!("{} WINS", w.name()), &TROPHY, true),
+    };
+    if won {
+        confetti(cv, bx, by, side, since);
+    }
+
+    let (x, y) = end_origin(g);
+    let pulse = 0.85 + 0.15 * (since * 3.0).sin();
+    bevel_box(cv, x, y, END_W, END_H, won.then(|| AMBER.scale(pulse)));
+    centred(out, x, END_W, y + 1, &reason.to_uppercase(), TEXT_DIM);
+
+    // The picture lands big, two canvas pixels a dot, with a drop shadow.
+    let lost = winner.is_some() && !won;
+    let (main, light, dark) = if lost {
+        (IDLE_TOP, TEXT, IDLE_BOTTOM)
+    } else {
+        (AMBER.scale(pulse), AMBER_TOP.scale(pulse), AMBER_BOTTOM.scale(0.7 * pulse))
+    };
+    let (px, py, u) = ((x + (END_W - 2 * art[0].len() as i32) / 2) * k, 2 * (y + 3) * k, 2 * k);
+    let dots = || art.iter().enumerate().flat_map(|(j, row)| row.chars().enumerate().map(move |(i, c)| (i as i32, j as i32, c)));
+    for (i, j, c) in dots() {
+        if c != ' ' {
+            cv.blend_rect(px + i * u + k, py + j * u + k, u, u, SHADOW, 0.8);
+        }
+    }
+    for (i, j, c) in dots() {
+        let colour = match c {
+            '#' => main,
+            '+' => light,
+            '-' => dark,
+            _ => continue,
+        };
+        cv.fill_rect(px + i * u, py + j * u, u, u, colour);
+    }
+
+    centred(out, x, END_W, y + 11, &headline, if lost { TEXT } else { AMBER_TOP });
+    let moves = app.history.len().div_ceil(2);
+    let after = format!("after {moves} move{}", if moves == 1 { "" } else { "s" });
+    centred(out, x, END_W, y + 12, &after, TEXT_DIM);
+
+    for (choice, label, dx) in END_BUTTONS {
+        let chosen = app.end_choice == choice;
+        let (cx, cy) = (x + dx, y + END_BUTTONS_ROW);
+        bevel_box(cv, cx, cy, END_BUTTON_W, 3, chosen.then(|| AMBER.scale(pulse)));
+        let (text, colour) = if chosen { (format!("▶ {label}"), AMBER_TOP) } else { (label.to_string(), TEXT) };
+        centred(out, cx, END_BUTTON_W, cy + 1, &text, colour);
+    }
+    centred_spans(out, x, END_W, y + END_H - 2, &keys(&[("ENTER", "go"), ("ESC", "see board")]));
+}
+
+/// Confetti falling over the board square at (`x`, `y`), `side` pixels
+/// wide, `t` seconds after the pop-up came: each piece has its own column,
+/// speed, sway and colour, and turns as it falls. It thins out after a few
+/// seconds and stops, so the pop-up settles.
+fn confetti(cv: &mut Canvas, x: i32, y: i32, side: i32, t: f32) {
+    const COLOURS: [Rgb; 5] = [AMBER_TOP, CURSOR, ALARM_TOP, PLY_WHITE, LAST_MOVE];
+    let k = cv.scale();
+    for i in 0..90 {
+        let r = |n: i32| hash(i, n, 0xc0ff);
+        // Each piece starts above the board at its own moment and falls once.
+        let start = r(1) * 2.5;
+        let fall = t - start;
+        if fall < 0.0 {
+            continue;
+        }
+        let speed = side as f32 * (0.35 + 0.35 * r(2));
+        let py = y as f32 - 4.0 * k as f32 + fall * speed;
+        if py >= (y + side) as f32 {
+            continue;
+        }
+        let sway = (fall * (2.0 + 2.0 * r(3)) + r(4) * 6.3).sin() * 3.0 * k as f32;
+        let px = x as f32 + r(5) * side as f32 + sway;
+        // Turning: wide, then edge-on, then wide again.
+        let wide = (fall * (5.0 + 4.0 * r(6))).cos().abs() > 0.4;
+        let (w, h) = if wide { (2 * k, k) } else { (k, k) };
+        let colour = COLOURS[(r(7) * COLOURS.len() as f32) as usize % COLOURS.len()];
+        let (px, py) = (px as i32, py as i32);
+        if px >= x && px + w <= x + side && py >= y {
+            cv.fill_rect(px, py, w, h, colour);
+        }
+    }
 }
 
 /// Where captured pieces start in a strip, and the columns each takes.

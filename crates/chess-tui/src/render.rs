@@ -129,6 +129,9 @@ impl Renderer {
         }
         if app.screen == Screen::Playing {
             cursor(&mut cv, &gk, cursor_sq, app.flipped, t);
+            if app.end_popup(now) {
+                panel::end_popup(&mut cv, &mut text, app, &g, now);
+            }
         } else {
             panel::countdown_popup(&mut cv, &mut text, app, &g, now);
         }

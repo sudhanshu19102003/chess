@@ -27,6 +27,16 @@ fn click(app: &mut App, at: &str) {
     press(app, KeyCode::Enter);
 }
 
+/// A game just ended by fool's mate at `t0`.
+fn mated(t0: Instant) -> App {
+    let mut app = game();
+    for uci in ["f2f3", "e7e5", "g2g4", "d8h4"] {
+        assert!(app.play_uci(uci, t0));
+    }
+    app.tick(t0);
+    app
+}
+
 #[test]
 fn only_the_side_to_move_can_pick_up_a_piece() {
     let mut app = game();
@@ -203,6 +213,40 @@ fn typed_promotion_and_castling() {
     assert_eq!(app.history[2].san, "O-O");
 }
 
+#[test]
+fn the_end_of_a_game_offers_a_new_game_or_home() {
+    use chess_tui::app::{END_PAUSE, EndChoice};
+    let t0 = Instant::now();
+    let later = t0 + END_PAUSE;
+    let key = |app: &mut App, code: KeyCode| app.on_key(KeyEvent::from(code), later);
+
+    // The pop-up waits a moment, so the last move is seen landing.
+    let mut app = mated(t0);
+    assert_eq!(app.ended_at, Some(t0));
+    assert!(!app.end_popup(t0));
+    assert!(app.end_popup(later));
+    // Esc puts it away to look at the board, and brings it back.
+    key(&mut app, KeyCode::Esc);
+    assert!(!app.end_popup(later));
+    key(&mut app, KeyCode::Esc);
+    assert!(app.end_popup(later));
+    // NEW GAME comes first: another countdown, same mode, fresh board.
+    assert_eq!(app.end_choice, EndChoice::NewGame);
+    key(&mut app, KeyCode::Enter);
+    assert!(matches!(app.screen, Screen::Countdown { .. }));
+    assert!(app.history.is_empty() && app.ended_at.is_none());
+
+    // HOME is the other button, or `r`.
+    let mut app = mated(t0);
+    key(&mut app, KeyCode::Right);
+    assert_eq!(app.end_choice, EndChoice::Home);
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.screen, Screen::Home);
+    let mut app = mated(t0);
+    key(&mut app, KeyCode::Char('r'));
+    assert_eq!(app.screen, Screen::Home);
+}
+
 mod mouse {
     use super::*;
     use chess_tui::layout;
@@ -284,6 +328,27 @@ mod mouse {
         // Queen, rook, bishop, knight down the a-file.
         tap(&mut app, "a6");
         assert_eq!(app.history[0].san, "a8=B");
+    }
+
+    #[test]
+    fn the_end_pop_up_buttons_click() {
+        use chess_tui::app::{END_PAUSE, EndChoice};
+        use chess_tui::{layout, panel};
+        let mut app = mated(Instant::now() - END_PAUSE);
+        let g = layout::compute(app.size.0 as i32, app.size.1 as i32).unwrap().g;
+        let cell_of = |choice| {
+            let cells = (0..app.size.1 as i32).flat_map(|row| (0..app.size.0 as i32).map(move |col| (col, row)));
+            cells.into_iter().find(|&(col, row)| panel::end_hit(&g, col, row) == Some(choice)).unwrap()
+        };
+        let (home, new_game) = (cell_of(EndChoice::Home), cell_of(EndChoice::NewGame));
+        assert_eq!(home.1, new_game.1);
+        assert!(home.0 > new_game.0);
+        // A click on the board under the pop-up does nothing.
+        let a1 = cell(&app, "a1");
+        mouse(&mut app, MouseEventKind::Down(MouseButton::Left), a1);
+        assert_eq!(app.screen, Screen::Playing);
+        mouse(&mut app, MouseEventKind::Down(MouseButton::Left), (home.0 as u16, home.1 as u16));
+        assert_eq!(app.screen, Screen::Home);
     }
 
     #[test]

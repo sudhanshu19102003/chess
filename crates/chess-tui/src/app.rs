@@ -19,6 +19,8 @@ const SLIDE_TIME: Duration = Duration::from_millis(180);
 const FLIP_PAUSE: Duration = Duration::from_millis(500);
 /// From choosing a mode to White's clock starting.
 pub const COUNTDOWN: Duration = Duration::from_secs(3);
+/// From the end of a game to its pop-up, so the last move is seen landing.
+pub const END_PAUSE: Duration = Duration::from_millis(900);
 /// How long a first `r` mid-game waits for the second.
 const LEAVE_TIME: Duration = Duration::from_secs(3);
 /// How long the copy button says COPIED.
@@ -270,6 +272,14 @@ pub struct Drag {
     pub was_selected: bool,
 }
 
+/// The buttons of the pop-up at the end of a game.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EndChoice {
+    /// The same mode again: a fresh countdown offline, the lobby online.
+    NewGame,
+    Home,
+}
+
 /// A pawn has reached the last rank and the player is choosing its piece.
 #[derive(Clone, Copy, Debug)]
 pub struct Promotion {
@@ -341,6 +351,12 @@ pub struct App {
     pub versus: Option<Versus>,
     /// For the engine, taken by the main loop.
     pub engine_requests: Vec<engine::Request>,
+    /// When this client saw the game end, for the pop-up and its confetti.
+    pub ended_at: Option<Instant>,
+    /// The pop-up's chosen button.
+    pub end_choice: EndChoice,
+    /// Esc put the pop-up away to look at the final position.
+    pub end_hidden: bool,
 }
 
 impl App {
@@ -381,6 +397,9 @@ impl App {
             engine: EngineStatus::Unknown,
             versus: None,
             engine_requests: Vec::new(),
+            ended_at: None,
+            end_choice: EndChoice::NewGame,
+            end_hidden: false,
         }
     }
 
@@ -421,6 +440,43 @@ impl App {
         self.result().is_some()
             || self.online.as_ref().is_some_and(|o| o.dropped.is_some())
             || self.versus.as_ref().is_some_and(|v| v.error.is_some())
+    }
+
+    /// Whether the game-over pop-up shows: a moment after the game ended,
+    /// unless Esc put it away.
+    pub fn end_popup(&self, now: Instant) -> bool {
+        self.screen == Screen::Playing && !self.end_hidden && self.ended_at.is_some_and(|at| now >= at + END_PAUSE)
+    }
+
+    /// The pop-up's buttons: another game of the same kind, or home.
+    fn end_go(&mut self, choice: EndChoice, now: Instant) {
+        match choice {
+            // A network game needs a new code, so it starts again in the lobby.
+            EndChoice::NewGame if self.online.is_some() => {
+                self.go_home(now);
+                self.screen = Screen::Lobby;
+            }
+            EndChoice::NewGame => self.begin(now),
+            EndChoice::Home => self.go_home(now),
+        }
+    }
+
+    fn on_end_key(&mut self, code: KeyCode, now: Instant) {
+        match code {
+            KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down | KeyCode::Tab | KeyCode::Char('h' | 'l' | 'k' | 'j') => {
+                self.end_choice = match self.end_choice {
+                    EndChoice::NewGame => EndChoice::Home,
+                    EndChoice::Home => EndChoice::NewGame,
+                }
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => self.end_go(self.end_choice, now),
+            KeyCode::Char('n') => self.end_go(EndChoice::NewGame, now),
+            KeyCode::Char('r') => self.end_go(EndChoice::Home, now),
+            KeyCode::Esc => self.end_hidden = true,
+            KeyCode::Char('f') => self.flipped = !self.flipped,
+            KeyCode::Char('g') => self.hires = !self.hires,
+            _ => {}
+        }
     }
 
     /// The side this player plays: online or against the computer. Offline
@@ -763,6 +819,9 @@ impl App {
         if self.slide.as_ref().is_some_and(|s| now.saturating_duration_since(s.start) >= SLIDE_TIME) {
             self.slide = None;
         }
+        if self.screen == Screen::Playing && self.ended_at.is_none() && self.result().is_some() {
+            self.ended_at = Some(now);
+        }
         // Not while a piece is being dragged: the board would turn under it.
         if self.flip_at.is_some_and(|at| now >= at) && self.drag.is_none() {
             self.flip_at = None;
@@ -817,6 +876,9 @@ impl App {
             }
             Screen::Playing => {}
         }
+        if self.end_popup(now) {
+            return self.on_end_key(key.code, now);
+        }
         if let Some(p) = self.promotion {
             self.on_promotion_key(key.code, p, now);
             return;
@@ -839,6 +901,8 @@ impl App {
             // Nobody can pause the other player's clock, and the computer's
             // runs while it thinks.
             KeyCode::Char('p') if self.online.is_none() && self.my_turn() => self.clock.toggle_pause(now),
+            // Esc brings back a game-over pop-up put away to see the board.
+            KeyCode::Esc if self.end_hidden => self.end_hidden = false,
             KeyCode::Esc => self.selected = None,
             KeyCode::Left | KeyCode::Char('h') => self.step(-1, 0),
             KeyCode::Right | KeyCode::Char('l') => self.step(1, 0),
@@ -1291,6 +1355,15 @@ impl App {
                 }
             }
             Screen::Countdown { .. } => {}
+            // The pop-up takes the clicks; the board under it does not.
+            Screen::Playing if self.end_popup(now) => {
+                if ev.kind == MouseEventKind::Down(MouseButton::Left)
+                    && let Some(layout) = layout::compute(self.size.0 as i32, self.size.1 as i32)
+                    && let Some(choice) = panel::end_hit(&layout.g, col, row)
+                {
+                    self.end_go(choice, now);
+                }
+            }
             Screen::Playing => self.on_board_mouse(ev.kind, col, row, now),
         }
     }

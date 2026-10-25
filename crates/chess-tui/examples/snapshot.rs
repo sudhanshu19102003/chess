@@ -206,6 +206,15 @@ fn main() {
             let moves = ["e2e4", "e7e5", "f1c4", "b8c6", "d1h5", "g8f6", "h5f7"];
             now = play(&mut app, t0, &moves) + Duration::from_secs(3);
         }
+        "won" | "agreed" => {
+            // The game-over pop-up, with the confetti in mid-fall for a win.
+            let moves = ["e2e4", "e7e5", "f1c4", "b8c6", "d1h5", "g8f6", "h5f7"];
+            let moves = if scene == "won" { &moves[..] } else { &moves[..4] };
+            now = play(&mut app, t0, moves);
+            app.agreed_draw = scene == "agreed";
+            app.tick(now);
+            now += chess_tui::app::END_PAUSE + Duration::from_millis(1600);
+        }
         "promotion" => {
             app.game = Game::from_position(Position::from_fen("1n2k3/P7/8/8/8/8/5PPP/4K3 w - - 0 40").unwrap());
             app.selected = Some(sq("a7"));
