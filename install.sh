@@ -4,7 +4,7 @@
 #   curl -fsSL https://chess.thesudhanshu.dev/install.sh | sh
 #
 # Picks the build for this OS and CPU (Linux x86_64 or aarch64, macOS x86_64
-# or arm64), checks the release signature and the archive's SHA-256, and puts
+# or arm64; Windows has install.ps1), checks the release signature and the archive's SHA-256, and puts
 # the binary in ~/.local/bin. No sudo.
 #
 # Settings (environment variables):
@@ -86,6 +86,11 @@ sha256() {
 }
 
 main() {
+    case "$(uname -s)" in
+        MINGW* | MSYS* | CYGWIN*)
+            die "this is the macOS and Linux installer; in PowerShell, run:
+  irm https://chess.thesudhanshu.dev/install.ps1 | iex" ;;
+    esac
     target=$(target) || die "no build for $(uname -s) $(uname -m); build from source instead:
   https://github.com/sudhanshu19102003/chess#install"
     has ssh-keygen || die "need ssh-keygen (OpenSSH) to check the signature; install it

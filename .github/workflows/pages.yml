@@ -1,13 +1,13 @@
-# https://chess.thesudhanshu.dev: site/index.html (the install command) and
-# install.sh, redeployed whenever either changes on main. install.sh always
-# fetches the latest release, so it need not wait for one.
+# https://chess.thesudhanshu.dev: site/index.html (the install commands),
+# install.sh and install.ps1, redeployed whenever one changes on main. The
+# scripts fetch the latest release, so they need not wait for one.
 
 name: pages
 
 on:
   push:
     branches: [main]
-    paths: [install.sh, "site/**", .github/workflows/pages.yml]
+    paths: [install.sh, install.ps1, "site/**", .github/workflows/pages.yml]
   workflow_dispatch:
 
 permissions:
@@ -29,7 +29,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: sh -n install.sh
-      - run: cp install.sh site/
+      - name: install.ps1 parses
+        shell: pwsh
+        run: |
+          $errors = $null
+          [Management.Automation.Language.Parser]::ParseFile("$PWD/install.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors; exit 1 }
+      - run: cp install.sh install.ps1 site/
       - uses: actions/upload-pages-artifact@v5
         with:
           path: site

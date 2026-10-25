@@ -12,15 +12,16 @@ pub mod render;
 pub mod sprite_sheet;
 pub mod theme;
 
-/// Truecolor unless the terminal says otherwise. `CHESS_COLORS=256` forces
-/// the 256-colour fallback.
+/// Truecolor when the terminal says so, and always on Windows, whose console
+/// and Windows Terminal both draw it but don't set `COLORTERM`.
+/// `CHESS_COLORS=256|truecolor` overrides.
 pub fn truecolor() -> bool {
     match std::env::var("CHESS_COLORS").as_deref() {
         Ok("256") => return false,
         Ok("truecolor") => return true,
         _ => {}
     }
-    matches!(std::env::var("COLORTERM").as_deref(), Ok("truecolor") | Ok("24bit"))
+    cfg!(windows) || matches!(std::env::var("COLORTERM").as_deref(), Ok("truecolor") | Ok("24bit"))
 }
 
 /// Whether to draw pieces with Unicode 16 octants, at twice the board's
