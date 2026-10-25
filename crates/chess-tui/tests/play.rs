@@ -358,7 +358,7 @@ mod mouse {
         let mut app = App::new(Instant::now());
         let (x, y) = home_origin(app.size.0 as i32, app.size.1 as i32);
         // The middle of the second button: peer to peer.
-        let at = ((x + HOME_W / 2) as u16, (y + 13) as u16);
+        let at = ((x + HOME_W / 2) as u16, (y + 15) as u16);
         mouse(&mut app, MouseEventKind::Down(MouseButton::Left), at);
         assert_eq!(app.mode, Mode::PeerToPeer);
         assert_eq!(app.screen, Screen::Lobby);

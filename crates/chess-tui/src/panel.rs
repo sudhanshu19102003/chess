@@ -186,101 +186,35 @@ fn time_spans(app: &App) -> Spans {
     ]
 }
 
-/// Auto flip, on or off, with its key.
-fn flip_spans(app: &App) -> Spans {
-    vec![
-        ("AUTO FLIP  ".into(), TEXT_DIM, false),
-        (if app.auto_flip { "ON " } else { "OFF" }.into(), TEXT, true),
-        ("  A".into(), AMBER, true),
-    ]
-}
-
 /// Row of the time control on the home screen and in the lobby, below the
-/// three buttons, and of auto flip on the home screen (offline only).
-const HOME_TIME_ROW: i32 = 20;
-const HOME_FLIP_ROW: i32 = 21;
+/// three buttons.
+const HOME_TIME_ROW: i32 = 22;
 /// A menu button: its column from the home box's left edge, its width, and
-/// the row of the first one. Its icon sits in the gap to its left, from
-/// column `ICON_X`, so icon and button together are centred.
-const BUTTON_X: i32 = 14;
-const BUTTON_W: i32 = 28;
-const BUTTONS_ROW: i32 = 8;
-const ICON_X: i32 = 4;
+/// the row of the first one. An emoji sits before its label, so it is
+/// as big as the text.
+const BUTTON_W: i32 = 32;
+const BUTTON_X: i32 = (HOME_W - BUTTON_W) / 2;
+const BUTTONS_ROW: i32 = 10;
 
-/// A menu icon, 8 x 7 pixels: `#` is the main colour, `+` light, `-` dark,
-/// a space clear. Its top is level with its 3-row button's.
-type Icon = [&'static str; 7];
-
-/// Offline: a board between two players at one keyboard.
-const BOARD: Icon = [
-    "########",
-    "#++--++#",
-    "#++--++#",
-    "#--++--#",
-    "#--++--#",
-    "#++--++#",
-    "########",
-];
-/// Peer to peer, and hosting online: the world.
-const GLOBE: Icon = [
-    "  ###   ",
-    " #+#-#  ",
-    "#+-#--# ",
-    "####### ",
-    "#--#--# ",
-    " #-#-#  ",
-    "  ###   ",
-];
-/// The computer opponent.
-const ROBOT: Icon = [
-    "   ##   ",
-    " ###### ",
-    "#-+--+-#",
-    "#------#",
-    "#-####-#",
-    "#------#",
-    " ###### ",
-];
-/// Hosting on the local network: Wi-Fi.
-const WIFI: Icon = [
-    " ###### ",
-    "#      #",
-    "  ####  ",
-    " #    # ",
-    "   ##   ",
-    "   ##   ",
-    "        ",
-];
-/// Joining with a code.
-const KEY: Icon = [
-    "        ",
-    " ##     ",
-    "#+-#    ",
-    "#--#####",
-    "#--# # #",
-    " ##     ",
-    "        ",
-];
-
-fn mode_icon(mode: Mode) -> &'static Icon {
+fn mode_glyph(mode: Mode) -> char {
     match mode {
-        Mode::Offline => &BOARD,
-        Mode::PeerToPeer => &GLOBE,
-        Mode::Computer => &ROBOT,
+        Mode::Offline => '👥',
+        Mode::PeerToPeer => '🌐',
+        Mode::Computer => '🤖',
     }
 }
 
-fn pick_icon(pick: Pick) -> &'static Icon {
+fn pick_glyph(pick: Pick) -> char {
     match pick {
-        Pick::Host => &GLOBE,
-        Pick::HostLan => &WIFI,
-        Pick::Join => &KEY,
+        Pick::Host => '🌐',
+        Pick::HostLan => '📡',
+        Pick::Join => '🔑',
     }
 }
 /// The game code's box and the copy button beside it, in the lobby: from
 /// the home box's left edge, and their width.
-const CODE_BOX: (i32, i32) = (3, 28);
-const COPY_BUTTON: (i32, i32) = (33, 10);
+const CODE_BOX: (i32, i32) = (10, 28);
+const COPY_BUTTON: (i32, i32) = (40, 10);
 const CODE_ROW: i32 = 10;
 
 /// What a click on the home screen or in the lobby landed on.
@@ -293,8 +227,6 @@ pub enum HomeHit {
     Pick(Pick),
     /// The game code or the copy button.
     Copy,
-    /// Auto flip, on the home screen.
-    AutoFlip,
     /// A VS COMPUTER setting: true for the next value, false for the previous.
     Setting(Setting, bool),
     /// The VS COMPUTER play button.
@@ -306,8 +238,7 @@ pub enum HomeHit {
 pub fn home_hit(app: &App, w: i32, h: i32, col: i32, row: i32) -> Option<HomeHit> {
     let (x, y) = home_origin(w, h);
     let inside = |bx: i32, by: i32, bw: i32, bh: i32| (bx..bx + bw).contains(&col) && (by..by + bh).contains(&row);
-    // A button's icon counts as the button.
-    let button = |i: i32| inside(x + ICON_X, y + BUTTONS_ROW + 4 * i, BUTTON_X + BUTTON_W - ICON_X, 3);
+    let button = |i: i32| inside(x + BUTTON_X, y + BUTTONS_ROW + 4 * i, BUTTON_W, 3);
     // The arrows and the name between them: the left half goes back.
     let time = |trow: i32| {
         let len: i32 = time_spans(app).iter().map(|(s, _, _)| s.chars().count() as i32).sum();
@@ -318,13 +249,7 @@ pub fn home_hit(app: &App, w: i32, h: i32, col: i32, row: i32) -> Option<HomeHit
         (Screen::Home, _) => (0..Mode::ALL.len())
             .find(|&i| button(i as i32))
             .map(|i| HomeHit::Mode(Mode::ALL[i]))
-            .or_else(|| time(y + HOME_TIME_ROW))
-            .or_else(|| {
-                let len: i32 = flip_spans(app).iter().map(|(s, _, _)| s.chars().count() as i32).sum();
-                let start = x + (HOME_W - len) / 2;
-                let on = app.mode == Mode::Offline && row == y + HOME_FLIP_ROW && (start..start + len).contains(&col);
-                on.then_some(HomeHit::AutoFlip)
-            }),
+            .or_else(|| time(y + HOME_TIME_ROW)),
         (Screen::Lobby, Lobby::Choose { pick }) => (0..Pick::ALL.len())
             .find(|&i| button(i as i32))
             .map(|i| HomeHit::Pick(Pick::ALL[i]))
@@ -347,16 +272,45 @@ pub fn home_hit(app: &App, w: i32, h: i32, col: i32, row: i32) -> Option<HomeHit
 
 /// The home screen's box, `HOME_W` x `HOME_H` cells, centred in a `w` x `h`
 /// window. Its top-left cell.
-pub const HOME_W: i32 = 46;
-pub const HOME_H: i32 = 28;
+pub const HOME_W: i32 = 60;
+pub const HOME_H: i32 = 30;
 pub fn home_origin(w: i32, h: i32) -> (i32, i32) {
     ((w - HOME_W) / 2, (h - HOME_H) / 2)
 }
 /// Columns from the box's left edge to each of the two piece tiles beside the
 /// title, which the renderer fills.
-pub const HOME_TILES: [i32; 2] = [3, HOME_W - 3 - layout::SQUARE];
+pub const HOME_TILES: [i32; 2] = [6, HOME_W - 6 - layout::SQUARE];
 /// The row the tiles start on, from the top of the box.
-pub const HOME_TILE_ROW: i32 = 2;
+pub const HOME_TILE_ROW: i32 = 3;
+
+/// A gold inlaid frame inside the home box's bevel: a thin line, a bright
+/// stud at each corner and a diamond in the middle of each side.
+fn home_frame(cv: &mut Canvas, x: i32, y: i32) {
+    let k = cv.scale();
+    let (px, py, pw, ph) = (x * k, 2 * y * k, HOME_W * k, 2 * HOME_H * k);
+    let (gold, dim) = (AMBER.scale(0.75), AMBER.scale(0.35));
+    let inset = 3 * k;
+    let (l, t, w, h) = (px + inset, py + inset, pw - 2 * inset, ph - 2 * inset);
+    cv.fill_rect(l, t, w, k, gold);
+    cv.fill_rect(l, t + h - k, w, k, gold);
+    cv.fill_rect(l, t, k, h, gold);
+    cv.fill_rect(l + w - k, t, k, h, gold);
+    // A fainter shade just inside, so the line looks inlaid.
+    cv.fill_rect(l + k, t + k, w - 2 * k, k, dim);
+    cv.fill_rect(l + k, t + h - 2 * k, w - 2 * k, k, dim);
+    cv.fill_rect(l + k, t + k, k, h - 2 * k, dim);
+    cv.fill_rect(l + w - 2 * k, t + k, k, h - 2 * k, dim);
+    for (cx, cy) in [(l - k, t - k), (l + w - 2 * k, t - k), (l - k, t + h - 2 * k), (l + w - 2 * k, t + h - 2 * k)] {
+        cv.fill_rect(cx, cy, 3 * k, 3 * k, AMBER_TOP);
+        cv.fill_rect(cx + k, cy + k, k, k, PANEL_OUTLINE);
+    }
+    for cx in [l - k, l + w - 2 * k] {
+        let cy = py + ph / 2;
+        for (dx, dy, w, h) in [(1, -2, 1, 5), (0, -1, 3, 3)] {
+            cv.fill_rect(cx + dx * k, cy + dy * k, w * k, h * k, AMBER_TOP);
+        }
+    }
+}
 
 /// The home screen before a game: a title between two tiles, one button per
 /// mode (or the peer-to-peer lobby), the time control and the keys. Drawn on
@@ -364,13 +318,14 @@ pub const HOME_TILE_ROW: i32 = 2;
 pub fn home(cv: &mut Canvas, out: &mut Vec<Text>, app: &App, w: i32, h: i32, now: Instant, t: f32) {
     let (x, y) = home_origin(w, h);
     bevel_box(cv, x, y, HOME_W, HOME_H, None);
+    home_frame(cv, x, y);
     for (i, dx) in HOME_TILES.into_iter().enumerate() {
         let (tx, ty, s) = (x + dx, 2 * (y + HOME_TILE_ROW), layout::SQUARE);
         cv.blend_rect(tx + 1, ty + 1, s, s, SHADOW, 0.6);
         cv.fill_rect(tx - 1, ty - 1, s + 2, s + 2, PANEL_OUTLINE);
         cv.fill_rect(tx, ty, s, s, if i == 0 { SQUARE_DARK } else { SQUARE_LIGHT });
     }
-    centred(out, x, HOME_W, y + 3, "TERMINAL CHESS", AMBER);
+    centred(out, x, HOME_W, y + 3, "CHESS", AMBER);
     if app.screen == Screen::Lobby {
         centred(out, x, HOME_W, y + 5, "play a friend", TEXT_DIM);
         return lobby(cv, out, app, x, y, now, t);
@@ -385,63 +340,34 @@ pub fn home(cv: &mut Canvas, out: &mut Vec<Text>, app: &App, w: i32, h: i32, now
     let pulse = 0.75 + 0.25 * (t * 3.0).sin();
     for (i, mode) in Mode::ALL.into_iter().enumerate() {
         let by = y + BUTTONS_ROW + 4 * i as i32;
-        button(cv, out, x, by, mode.name(), mode_icon(mode), mode == app.mode, pulse);
+        button(cv, out, x, by, mode.name(), mode_glyph(mode), mode == app.mode, pulse);
     }
     centred_spans(out, x, HOME_W, y + HOME_TIME_ROW, &time_spans(app));
-    if app.mode == Mode::Offline {
-        centred_spans(out, x, HOME_W, y + HOME_FLIP_ROW, &flip_spans(app));
-    }
 
     if let Some(why) = &app.drawn {
-        centred(out, x, HOME_W, y + 22, "LAST GAME DRAWN", ALARM_TOP);
-        for (i, line) in wrap(why, HOME_W as usize - 6).iter().take(2).enumerate() {
-            centred(out, x, HOME_W, y + 23 + i as i32, line, TEXT_DIM);
+        centred(out, x, HOME_W, y + 24, "LAST GAME DRAWN", ALARM_TOP);
+        for line in wrap(why, HOME_W as usize - 6).iter().take(1) {
+            centred(out, x, HOME_W, y + 25, line, TEXT_DIM);
         }
     }
     let help = keys(&[("↑↓", "mode"), ("←→", "time"), ("ENTER", "start"), ("Q", "quit")]);
-    centred_spans(out, x, HOME_W, y + HOME_H - 2, &help);
+    centred_spans(out, x, HOME_W, y + HOME_H - 4, &help);
 }
 
-/// One menu button with its icon, glowing when chosen.
+/// One menu button with an emoji before its label, glowing when chosen.
 #[allow(clippy::too_many_arguments)]
-fn button(cv: &mut Canvas, out: &mut Vec<Text>, x: i32, by: i32, name: &str, art: &Icon, chosen: bool, pulse: f32) {
-    icon(cv, x + ICON_X, by, art, chosen, pulse);
+fn button(cv: &mut Canvas, out: &mut Vec<Text>, x: i32, by: i32, name: &str, glyph: char, chosen: bool, pulse: f32) {
     let (bw, bx) = (BUTTON_W, x + BUTTON_X);
     bevel_box(cv, bx, by, bw, 3, chosen.then(|| AMBER.scale(pulse)));
-    let (label, colour) = match chosen {
-        true => (format!("▶ {name}"), AMBER_TOP.scale(pulse)),
-        false => (name.to_string(), TEXT),
-    };
-    out.push(Text::new(bx + 3, by + 1, label, colour).bold());
-}
-
-/// A menu icon at column `x`, beside the button on row `by`, with a shadow
-/// like the button's. Amber when its button is chosen.
-fn icon(cv: &mut Canvas, x: i32, by: i32, art: &Icon, chosen: bool, pulse: f32) {
-    let (main, light, dark) = if chosen {
-        (AMBER.scale(pulse), AMBER_TOP.scale(pulse), AMBER_BOTTOM.scale(0.6 * pulse))
-    } else {
-        (IDLE_TOP, TEXT, IDLE_BOTTOM.scale(0.7))
-    };
-    let k = cv.scale();
-    let (px, py) = (x * k, 2 * by * k);
-    let pixels = || {
-        art.iter().enumerate().flat_map(|(j, row)| row.chars().enumerate().map(move |(i, ch)| (i as i32, j as i32, ch)))
-    };
-    for (i, j, ch) in pixels() {
-        if ch != ' ' {
-            cv.blend_rect(px + (i + 1) * k, py + (j + 1) * k, k, k, SHADOW, 0.6);
-        }
+    let colour = if chosen { AMBER_TOP.scale(pulse) } else { TEXT };
+    // The emoji (two cells wide, keeping its own colours) and the name are
+    // centred together; the marker hangs to their left.
+    let start = bx + (bw - (3 + name.chars().count() as i32)) / 2;
+    if chosen {
+        out.push(Text::new(start - 3, by + 1, "▶".to_string(), colour).bold());
     }
-    for (i, j, ch) in pixels() {
-        let colour = match ch {
-            '#' => main,
-            '+' => light,
-            '-' => dark,
-            _ => continue,
-        };
-        cv.fill_rect(px + i * k, py + j * k, k, k, colour);
-    }
+    out.push(Text::new(start, by + 1, glyph.to_string(), colour));
+    out.push(Text::new(start + 3, by + 1, name.to_string(), colour).bold());
 }
 
 /// A help line of keys and what they do.
@@ -481,7 +407,7 @@ fn wrap(s: &str, w: usize) -> Vec<String> {
 }
 
 /// The VS COMPUTER settings and the row each is on in the home box.
-const SETUP_ROWS: [(Setting, i32); 3] = [(Setting::Level, 8), (Setting::Colour, 11), (Setting::Time, 13)];
+const SETUP_ROWS: [(Setting, i32); 3] = [(Setting::Level, 9), (Setting::Colour, 11), (Setting::Time, 13)];
 /// The play button: its row and width.
 const PLAY_ROW: i32 = 15;
 const PLAY_W: i32 = 20;
@@ -490,7 +416,7 @@ const PLAY_W: i32 = 20;
 /// focus.
 fn setting_spans(app: &App, setting: Setting) -> Spans {
     let (name, value) = match setting {
-        Setting::Level => ("LEVEL  ", format!("{} of {}", app.setup.level + 1, engine::LEVELS.len())),
+        Setting::Level => ("LEVEL  ", engine::LEVELS[app.setup.level.min(engine::LEVELS.len() - 1)].name.to_string()),
         Setting::Colour => ("PLAY AS  ", app.setup.colour.name().to_string()),
         _ => ("TIME  ", time_control(app)),
     };
@@ -512,8 +438,6 @@ fn setup(cv: &mut Canvas, out: &mut Vec<Text>, app: &App, x: i32, y: i32, t: f32
     for (setting, row) in SETUP_ROWS {
         centred_spans(out, x, HOME_W, y + row, &setting_spans(app, setting));
     }
-    let level = engine::LEVELS[app.setup.level.min(engine::LEVELS.len() - 1)];
-    centred(out, x, HOME_W, y + 9, level.name, TEXT_FAINT);
 
     let ready = matches!(app.engine, EngineStatus::Ready { .. });
     let focus = app.setup.focus == Setting::Play;
@@ -559,7 +483,7 @@ fn setup(cv: &mut Canvas, out: &mut Vec<Text>, app: &App, x: i32, y: i32, t: f32
             keys(&[("ENTER", "try again"), ("ESC", "back")])
         }
     };
-    centred_spans(out, x, HOME_W, y + HOME_H - 2, &help);
+    centred_spans(out, x, HOME_W, y + HOME_H - 4, &help);
 }
 
 /// The peer-to-peer lobby, inside the home box from row 8 down.
@@ -568,7 +492,7 @@ fn lobby(cv: &mut Canvas, out: &mut Vec<Text>, app: &App, x: i32, y: i32, now: I
     let help = match &app.lobby {
         Lobby::Choose { pick } => {
             for (i, p) in Pick::ALL.into_iter().enumerate() {
-                button(cv, out, x, y + BUTTONS_ROW + 4 * i as i32, p.name(), pick_icon(p), p == *pick, pulse);
+                button(cv, out, x, y + BUTTONS_ROW + 4 * i as i32, p.name(), pick_glyph(p), p == *pick, pulse);
             }
             if *pick == Pick::Join {
                 centred(out, x, HOME_W, y + HOME_TIME_ROW, "the host chooses the time", TEXT_FAINT);
@@ -580,7 +504,7 @@ fn lobby(cv: &mut Canvas, out: &mut Vec<Text>, app: &App, x: i32, y: i32, now: I
                 Pick::HostLan => "same Wi-Fi or hotspot, no server needed",
                 Pick::Join => "with the code on the host's screen",
             };
-            centred(out, x, HOME_W, y + 22, hint, TEXT_DIM);
+            centred(out, x, HOME_W, y + 24, hint, TEXT_DIM);
             keys(&[("↑↓", "choose"), ("←→", "time"), ("ENTER", "go"), ("ESC", "back")])
         }
         Lobby::Code { input, error } => {
@@ -648,7 +572,7 @@ fn lobby(cv: &mut Canvas, out: &mut Vec<Text>, app: &App, x: i32, y: i32, now: I
             keys(&[("ENTER", "try again"), ("ESC", "back")])
         }
     };
-    centred_spans(out, x, HOME_W, y + HOME_H - 2, &help);
+    centred_spans(out, x, HOME_W, y + HOME_H - 4, &help);
 }
 
 /// The box for a move being typed: what was typed, then up to five legal

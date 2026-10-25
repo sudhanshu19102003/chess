@@ -1387,7 +1387,6 @@ impl App {
                 self.on_lobby_key(KeyCode::Enter);
             }
             HomeHit::Copy => self.copy_code(),
-            HomeHit::AutoFlip => self.on_home_key(KeyCode::Char('a'), now),
             HomeHit::Setting(setting, next) => {
                 self.setup.focus = setting;
                 self.on_setup_key(if next { KeyCode::Right } else { KeyCode::Left }, now);
