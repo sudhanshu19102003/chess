@@ -115,8 +115,23 @@ size; if the window is too small it asks you to zoom out, and if it is much
 bigger it asks you to zoom in (Enter plays anyway).
 
 The home screen offers **OFFLINE** (two players at one keyboard), **PEER TO
-PEER**, and **VS COMPUTER** (not built yet). Pick a time control, press Enter,
+PEER**, and **VS COMPUTER**. Pick a time control, press Enter,
 and the game starts after a 3-2-1 countdown.
+
+**VS COMPUTER** plays against [Stockfish](https://stockfishchess.org). It is
+not bundled: the first time you open the mode, the game downloads the official
+Stockfish 19 build for your system from
+[its GitHub releases](https://github.com/official-stockfish/Stockfish/releases)
+(about 80 MB, once), checks it against the release's SHA-256, and keeps it in
+`~/Library/Application Support/chess` (macOS), `~/.local/share/chess` (Linux,
+or `$XDG_DATA_HOME/chess`) or `%LOCALAPPDATA%\chess` (Windows). This needs
+`curl` (or `wget`) and `tar`, which macOS, Windows 10 and later, and most
+Linux systems already have; in Termux, `pkg install curl`. Then choose a
+**level** from 1 (beginner) to 8 (full strength; `1`–`8` pick one directly),
+the colour you play (white, black or random) and the time control. Levels
+below 8 use Stockfish's own Skill Level with a cap on how deep and how long it
+looks. The computer does not take draw offers. To use an engine you already
+have, set `CHESS_STOCKFISH` to its path (any UCI engine works).
 
 | Keys | |
 |---|---|
@@ -128,9 +143,9 @@ and the game starts after a 3-2-1 countdown.
 | `d` | offer a draw, or accept the other player's |
 | `x` twice | resign |
 | `f` | flip the board |
-| `a` | auto flip on or off (offline; on by default: after each move the board turns to the side to move) |
+| `a` | auto flip on or off (two players offline; on by default: after each move the board turns to the side to move) |
 | `g` | high-resolution pieces on or off |
-| `p` | pause the clock (offline only) |
+| `p` | pause the clock (offline, and on your own turn against the computer) |
 | `r` | back to the home screen (twice in an unfinished online game) |
 | `q` | quit |
 
@@ -300,6 +315,11 @@ on itch.io ("Chess Asset 16bit pixel art" by Graciano Choc, gchoc). Every
 piece on the board comes from it, and it is generously released to the
 public domain (CC0). The sprite sheet and its notes are in
 [`assets/pieces/`](assets/pieces/).
+
+VS COMPUTER is played by [Stockfish](https://stockfishchess.org)
+([GitHub](https://github.com/official-stockfish/Stockfish), GPL-3.0), which
+the game downloads from its official releases and talks to over UCI; its
+levels follow [Lichess](https://lichess.org)'s.
 
 The lag allowance follows the design of [Lichess](https://lichess.org)'s open
 source lag compensation in [scalachess](https://github.com/lichess-org/scalachess).
