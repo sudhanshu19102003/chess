@@ -17,7 +17,15 @@ usage: chess-tui [--server HOST[:PORT]] [--relay HOST[:PORT]] [--force-relay]
              or play.chess.thesudhanshu.dev; port 7777
   --relay    relay: $CHESS_RELAY, or the server's host on port 443
   --force-relay  skip the direct connection (both players must pass it)
-  --version  print the version";
+  --version  print the version and licence";
+
+/// The GPL's "appropriate legal notice", shown by `--version`.
+const NOTICE: &str = "\
+Copyright (C) 2026 Sudhanshu Suryawanshi
+License GPL-3.0-or-later <https://www.gnu.org/licenses/gpl.html>
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
+Source: https://github.com/sudhanshu19102003/chess";
 
 fn main() -> std::io::Result<()> {
     let mut servers = Servers::from_env();
@@ -28,7 +36,7 @@ fn main() -> std::io::Result<()> {
             "--relay" => servers.relay = args.next(),
             "--force-relay" => servers.force_relay = true,
             "--version" | "-V" => {
-                println!("chess-tui {}", env!("CARGO_PKG_VERSION"));
+                println!("chess-tui {}\n{NOTICE}", env!("CARGO_PKG_VERSION"));
                 return Ok(());
             }
             "--help" | "-h" => {

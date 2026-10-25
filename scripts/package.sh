@@ -1,9 +1,10 @@
 #!/bin/sh
 # Builds the release archive for one target: dist/chess-<target>.tar.gz
 # (.zip for Windows), holding chess-tui, the two servers (chess-rendezvous,
-# chess-relay) and the README. Used by .github/workflows/release.yml; runs
-# locally too (Windows targets need a Windows machine with Visual Studio's
-# C++ build tools, or the release workflow).
+# chess-relay), the README and the LICENSE. Used by
+# .github/workflows/release.yml; runs locally too (Windows targets need a
+# Windows machine with Visual Studio's C++ build tools, or the release
+# workflow).
 #
 #   scripts/package.sh aarch64-unknown-linux-musl
 #
@@ -40,7 +41,7 @@ mkdir -p "$stage" dist
 for bin in chess-tui chess-rendezvous chess-relay; do
     cp "target/$target/dist/$bin$exe" "$stage/"
 done
-cp README.md "$stage/"
+cp README.md LICENSE "$stage/"
 if [ -n "$exe" ]; then
     # Windows unpacks zip files itself. Git Bash has no zip, but GitHub's
     # Windows runners have 7-Zip.

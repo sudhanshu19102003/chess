@@ -310,5 +310,10 @@ and [ed25519-dalek](https://crates.io/crates/ed25519-dalek).
 
 ## License
 
-No license has been chosen yet, so all rights are reserved for now. The piece
-art in `assets/pieces/` is CC0 and free for anyone to use.
+Copyright (C) 2026 Sudhanshu Suryawanshi
+
+This game is free software, released under the GNU General Public License,
+version 3 or (at your option) any later version ([`LICENSE`](LICENSE)). You
+may use, study, share and change it; if you pass on a copy or a changed
+version, it must carry the same licence and its source code. It comes with no
+warranty. The piece art in `assets/pieces/` is CC0 and free for anyone to use.

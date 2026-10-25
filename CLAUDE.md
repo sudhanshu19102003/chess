@@ -133,7 +133,7 @@ Testing:
 ## Open questions
 
 - [ ] Is the TCP direct-connection rate good enough, or do we add UDP?
-- [ ] Who hosts the rendezvous server and relay, and on which domain? (The code is on GitHub at `sudhanshu19102003/chess`, private for now, no license chosen yet.)
+- [ ] Who hosts the rendezvous server and relay, and on which domain? (The code is on GitHub at `sudhanshu19102003/chess`, now public, licensed GPL-3.0-or-later as of 2026-10-25: `LICENSE` at the root, `license` in every crate's `Cargo.toml`, shipped in the release archives; copyright "Sudhanshu Suryawanshi" in the README's License section and in `chess-tui --version`, which prints the GPL notice.)
 - [x] Forfeit and timeout policy when a peer stalls or sends invalid moves. The first refused message, or lag beyond the quota, draws the game and returns to the home screen; a hash mismatch or lost connection drops it with no result. A silent opponent past their time and quota loses on time locally (not logged). Known gap: a losing player can still escape by sending a bad message (draw) or disconnecting (no result); without a referee this can't be closed.
 - [x] Clocks in the first version, or play untimed? Clocks; see Verification protocol, Clocks.
 - [ ] Lag quota constants: Lichess's doubled for now; check them against the milestone 3 round-trip measurements, since a quota too small draws honest games.
