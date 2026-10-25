@@ -90,6 +90,26 @@ fn a_whole_game_over_the_link() {
 }
 
 #[test]
+fn a_new_game_after_a_network_game_starts_in_the_lobby() {
+    let t0 = Instant::now();
+    let (mut w, mut b) = pair(t0);
+    for (i, uci) in ["f2f3", "e7e5", "g2g4", "d8h4"].iter().enumerate() {
+        let now = t0 + Duration::from_secs(i as u64 + 1);
+        if i % 2 == 0 { play(&mut w, &mut b, uci, now) } else { play(&mut b, &mut w, uci, now) }
+    }
+    let later = t0 + Duration::from_secs(10);
+    w.tick(later);
+    let after = later + chess_tui::app::END_PAUSE;
+    assert!(w.end_popup(after));
+    // A new code is needed, so NEW GAME hangs up and opens the lobby.
+    w.requests.clear();
+    w.on_key(KeyEvent::from(KeyCode::Enter), after);
+    assert_eq!(w.screen, Screen::Lobby);
+    assert_eq!(w.requests, [Request::Hangup]);
+    assert!(w.online.is_none());
+}
+
+#[test]
 fn only_your_own_pieces_on_your_own_turn() {
     let t0 = Instant::now();
     let (mut w, mut b) = pair(t0);

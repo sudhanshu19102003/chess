@@ -7,6 +7,7 @@ use chess_verify::{Received, Signal};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 use crate::clock::{self, Clock};
+use crate::engine::{self, Think};
 use crate::layout::{self, Fit};
 use crate::net::{Failure, NetEvent, Request};
 use crate::online::Online;
@@ -18,8 +19,8 @@ const SLIDE_TIME: Duration = Duration::from_millis(180);
 const FLIP_PAUSE: Duration = Duration::from_millis(500);
 /// From choosing a mode to White's clock starting.
 pub const COUNTDOWN: Duration = Duration::from_secs(3);
-/// How long the "not built yet" note shows on the home screen.
-const NOTICE_TIME: Duration = Duration::from_millis(1800);
+/// From the end of a game to its pop-up, so the last move is seen landing.
+pub const END_PAUSE: Duration = Duration::from_millis(900);
 /// How long a first `r` mid-game waits for the second.
 const LEAVE_TIME: Duration = Duration::from_secs(3);
 /// How long the copy button says COPIED.
@@ -48,11 +49,6 @@ impl Mode {
             Mode::Computer => "VS COMPUTER",
         }
     }
-
-    /// Whether the mode can be played yet.
-    pub fn available(self) -> bool {
-        self != Mode::Computer
-    }
 }
 
 /// What the window shows.
@@ -62,6 +58,8 @@ pub enum Screen {
     Home,
     /// Setting up a peer-to-peer game: see `App::lobby`. No board.
     Lobby,
+    /// Setting up a game against the computer: see `App::setup`. No board.
+    Setup,
     /// The board is set up and White's clock starts at `go`.
     Countdown { go: Instant },
     Playing,
@@ -139,6 +137,87 @@ fn on_lan(request: &Request) -> bool {
     }
 }
 
+/// The colour the player takes against the computer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Colour {
+    White,
+    Black,
+    Random,
+}
+
+impl Colour {
+    pub const ALL: [Colour; 3] = [Colour::White, Colour::Black, Colour::Random];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Colour::White => "WHITE",
+            Colour::Black => "BLACK",
+            Colour::Random => "RANDOM",
+        }
+    }
+
+    /// The side played, a coin flip for `Random`.
+    fn side(self) -> Side {
+        use std::hash::{BuildHasher, RandomState};
+        match self {
+            Colour::White => Side::White,
+            Colour::Black => Side::Black,
+            Colour::Random if RandomState::new().hash_one(0u8) & 1 == 0 => Side::White,
+            Colour::Random => Side::Black,
+        }
+    }
+}
+
+/// The rows of the VS COMPUTER setup screen, top to bottom.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Setting {
+    Level,
+    Colour,
+    Time,
+    Play,
+}
+
+impl Setting {
+    pub const ALL: [Setting; 4] = [Setting::Level, Setting::Colour, Setting::Time, Setting::Play];
+}
+
+/// The choices for a game against the computer, kept between games.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Setup {
+    /// The row that left and right change.
+    pub focus: Setting,
+    /// Index into `engine::LEVELS`.
+    pub level: usize,
+    pub colour: Colour,
+}
+
+/// Where Stockfish stands, as the setup screen shows it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EngineStatus {
+    /// Not asked for yet.
+    Unknown,
+    /// Asked to start; it is looking for, or starting, the engine.
+    Starting,
+    Downloading { got: u64, total: u64 },
+    Ready { name: String },
+    Failed(String),
+}
+
+/// A game against the computer in progress.
+#[derive(Clone, Debug)]
+pub struct Versus {
+    /// The player's side; the engine plays the other.
+    pub human: Side,
+    /// Index into `engine::LEVELS`.
+    pub level: usize,
+    /// The search waiting for an answer.
+    pub asked: Option<u64>,
+    /// Searches asked for so far this game.
+    pub asks: u64,
+    /// The engine failed mid-game, which ends it with no result.
+    pub error: Option<String>,
+}
+
 /// A move as shown in the history panel.
 #[derive(Clone, Debug)]
 pub struct MoveRecord {
@@ -193,6 +272,14 @@ pub struct Drag {
     pub was_selected: bool,
 }
 
+/// The buttons of the pop-up at the end of a game.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EndChoice {
+    /// The same mode again: a fresh countdown offline, the lobby online.
+    NewGame,
+    Home,
+}
+
 /// A pawn has reached the last rank and the player is choosing its piece.
 #[derive(Clone, Copy, Debug)]
 pub struct Promotion {
@@ -206,8 +293,6 @@ pub struct App {
     pub screen: Screen,
     /// The mode chosen, or highlighted on the home screen.
     pub mode: Mode,
-    /// When the home screen last said the chosen mode is not built yet.
-    pub notice: Option<Instant>,
     /// Why the last network game was drawn, shown on the home screen until
     /// a key is pressed.
     pub drawn: Option<String>,
@@ -259,6 +344,19 @@ pub struct App {
     pub agreed_draw: bool,
     /// When resign was first pressed; a second press resigns.
     pub resigning: Option<Instant>,
+    /// The VS COMPUTER choices.
+    pub setup: Setup,
+    pub engine: EngineStatus,
+    /// A game against the computer.
+    pub versus: Option<Versus>,
+    /// For the engine, taken by the main loop.
+    pub engine_requests: Vec<engine::Request>,
+    /// When this client saw the game end, for the pop-up and its confetti.
+    pub ended_at: Option<Instant>,
+    /// The pop-up's chosen button.
+    pub end_choice: EndChoice,
+    /// Esc put the pop-up away to look at the final position.
+    pub end_hidden: bool,
 }
 
 impl App {
@@ -266,7 +364,6 @@ impl App {
         App {
             screen: Screen::Home,
             mode: Mode::Offline,
-            notice: None,
             drawn: None,
             game: Game::new(),
             cursor: chess_core::square(4, 1),
@@ -296,6 +393,13 @@ impl App {
             draw_offer: None,
             agreed_draw: false,
             resigning: None,
+            setup: Setup { focus: Setting::Level, level: engine::DEFAULT_LEVEL, colour: Colour::White },
+            engine: EngineStatus::Unknown,
+            versus: None,
+            engine_requests: Vec::new(),
+            ended_at: None,
+            end_choice: EndChoice::NewGame,
+            end_hidden: false,
         }
     }
 
@@ -333,19 +437,73 @@ impl App {
 
     /// No more moves: the game has a result, or a network game was dropped.
     pub fn over(&self) -> bool {
-        self.result().is_some() || self.online.as_ref().is_some_and(|o| o.dropped.is_some())
+        self.result().is_some()
+            || self.online.as_ref().is_some_and(|o| o.dropped.is_some())
+            || self.versus.as_ref().is_some_and(|v| v.error.is_some())
+    }
+
+    /// Whether the game-over pop-up shows: a moment after the game ended,
+    /// unless Esc put it away.
+    pub fn end_popup(&self, now: Instant) -> bool {
+        self.screen == Screen::Playing && !self.end_hidden && self.ended_at.is_some_and(|at| now >= at + END_PAUSE)
+    }
+
+    /// The pop-up's buttons: another game of the same kind, or home.
+    fn end_go(&mut self, choice: EndChoice, now: Instant) {
+        match choice {
+            // A network game needs a new code, so it starts again in the lobby.
+            EndChoice::NewGame if self.online.is_some() => {
+                self.go_home(now);
+                self.screen = Screen::Lobby;
+            }
+            EndChoice::NewGame => self.begin(now),
+            EndChoice::Home => self.go_home(now),
+        }
+    }
+
+    fn on_end_key(&mut self, code: KeyCode, now: Instant) {
+        match code {
+            KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down | KeyCode::Tab | KeyCode::Char('h' | 'l' | 'k' | 'j') => {
+                self.end_choice = match self.end_choice {
+                    EndChoice::NewGame => EndChoice::Home,
+                    EndChoice::Home => EndChoice::NewGame,
+                }
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => self.end_go(self.end_choice, now),
+            KeyCode::Char('n') => self.end_go(EndChoice::NewGame, now),
+            KeyCode::Char('r') => self.end_go(EndChoice::Home, now),
+            KeyCode::Esc => self.end_hidden = true,
+            KeyCode::Char('f') => self.flipped = !self.flipped,
+            KeyCode::Char('g') => self.hires = !self.hires,
+            _ => {}
+        }
+    }
+
+    /// The side this player plays: online or against the computer. Offline
+    /// both sides are theirs.
+    pub fn me(&self) -> Option<Side> {
+        match (&self.online, &self.versus) {
+            (Some(o), _) => Some(o.me()),
+            (None, Some(v)) => Some(v.human),
+            _ => None,
+        }
+    }
+
+    /// Two players at one keyboard: no network, no computer.
+    fn local(&self) -> bool {
+        self.me().is_none()
     }
 
     /// Whether this player may move now: always offline, only on their own
-    /// turn online.
+    /// turn online and against the computer.
     fn my_turn(&self) -> bool {
-        self.online.as_ref().is_none_or(|o| o.me() == self.to_move())
+        self.me().is_none_or(|me| me == self.to_move())
     }
 
-    /// Who the draw and resign buttons act for: this player online, the
-    /// side to move offline.
+    /// Who the draw and resign buttons act for: this player online or
+    /// against the computer, the side to move offline.
     pub fn actor(&self) -> Side {
-        self.online.as_ref().map_or(self.to_move(), |o| o.me())
+        self.me().unwrap_or(self.to_move())
     }
 
     /// Whether a second resign press now resigns.
@@ -360,7 +518,8 @@ impl App {
 
     /// What the draw button would do now, if anything.
     pub fn draw_action(&self) -> Option<Signal> {
-        if self.over() || self.screen != Screen::Playing || self.pending().is_some() {
+        // The computer plays on.
+        if self.over() || self.screen != Screen::Playing || self.pending().is_some() || self.versus.is_some() {
             return None;
         }
         let actor = self.actor();
@@ -453,11 +612,6 @@ impl App {
         }
     }
 
-    /// Whether the home screen's "not built yet" note shows.
-    pub fn notice_showing(&self, now: Instant) -> bool {
-        self.notice.is_some_and(|at| now.saturating_duration_since(at) < NOTICE_TIME)
-    }
-
     /// A fresh board for the chosen mode, keeping the player's settings.
     fn fresh(&self, now: Instant) -> App {
         App {
@@ -471,16 +625,22 @@ impl App {
             clock: Clock::new(self.clock.preset),
             started: self.started,
             server: self.server.clone(),
+            setup: self.setup,
+            engine: self.engine.clone(),
             ..App::new(now)
         }
     }
 
-    /// Back to the home screen, leaving any network game.
+    /// Back to the home screen, leaving any network game or stopping the
+    /// computer.
     fn go_home(&mut self, now: Instant) {
-        let online = self.online.is_some();
+        let (online, versus) = (self.online.is_some(), self.versus.is_some());
         *self = self.fresh(now);
         if online {
             self.requests.push(Request::Hangup);
+        }
+        if versus {
+            self.engine_requests.push(engine::Request::Stop);
         }
     }
 
@@ -501,9 +661,131 @@ impl App {
         }
     }
 
-    /// Sets up a new game and counts down to its start.
+    /// Sets up a new game and counts down to its start. Against the
+    /// computer the board turns to the player's side.
     pub fn begin(&mut self, now: Instant) {
-        *self = App { screen: Screen::Countdown { go: now + COUNTDOWN }, ..self.fresh(now) };
+        if self.versus.is_some() {
+            self.engine_requests.push(engine::Request::Stop);
+        }
+        let requests = std::mem::take(&mut self.engine_requests);
+        *self = App { screen: Screen::Countdown { go: now + COUNTDOWN }, engine_requests: requests, ..self.fresh(now) };
+        if self.mode == Mode::Computer {
+            let human = self.setup.colour.side();
+            self.versus = Some(Versus { human, level: self.setup.level, asked: None, asks: 0, error: None });
+            self.flipped = human == Side::Black;
+            self.cursor = chess_core::square(4, if human == Side::White { 1 } else { 6 });
+        }
+    }
+
+    /// On the computer's turn, asks the engine for its move, once the last
+    /// move has finished sliding in.
+    fn ask_engine(&mut self, now: Instant) {
+        if self.screen != Screen::Playing || self.over() || self.slide.is_some() || self.my_turn() {
+            return;
+        }
+        let Some(v) = &mut self.versus else { return };
+        if v.asked.is_some() {
+            return;
+        }
+        v.asks += 1;
+        v.asked = Some(v.asks);
+        let left = [Side::White, Side::Black].map(|s| self.clock.remaining(s, now).as_millis() as u64);
+        let think = Think {
+            id: v.asks,
+            new_game: v.asks == 1,
+            moves: self.game.moves().iter().map(|m| m.uci()).collect(),
+            level: v.level,
+            left_ms: left,
+            increment_ms: self.clock.control().increment * 1000,
+        };
+        self.engine_requests.push(engine::Request::Think(think));
+    }
+
+    /// Something from the engine.
+    pub fn on_engine(&mut self, event: engine::Event, now: Instant) {
+        match event {
+            engine::Event::Progress { got, total } => self.engine = EngineStatus::Downloading { got, total },
+            engine::Event::Ready { name } => self.engine = EngineStatus::Ready { name },
+            engine::Event::Failed(why) => {
+                let over = self.over();
+                if let Some(v) = &mut self.versus
+                    && !over
+                {
+                    v.error = Some(why.clone());
+                    self.clock.halt(now);
+                }
+                self.engine = EngineStatus::Failed(why);
+            }
+            engine::Event::Move { id, uci } => {
+                let over = self.over();
+                let Some(v) = &mut self.versus else { return };
+                if v.asked != Some(id) || over {
+                    return;
+                }
+                v.asked = None;
+                let legal = Move::parse_uci(&uci).filter(|mv| self.game.position().legal_moves().contains(mv));
+                match legal {
+                    Some(mv) => _ = self.show_move(mv, now),
+                    None => {
+                        v.error = Some(format!("the engine sent a move that is not legal here ({uci})"));
+                        self.clock.halt(now);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Opens the VS COMPUTER setup, starting Stockfish (and downloading it
+    /// the first time) unless it is already up or on its way.
+    fn open_setup(&mut self) {
+        self.screen = Screen::Setup;
+        if matches!(self.engine, EngineStatus::Unknown | EngineStatus::Failed(_)) {
+            self.engine = EngineStatus::Starting;
+            self.engine_requests.push(engine::Request::Prepare);
+        }
+    }
+
+    /// The setup screen: up and down choose a row, left and right change
+    /// it, 1 to 8 pick a level, Enter plays once the engine is ready (or
+    /// tries again after a failure), Esc goes back.
+    fn on_setup_key(&mut self, code: KeyCode, now: Instant) {
+        let rows = Setting::ALL.len();
+        let at = Setting::ALL.iter().position(|&s| s == self.setup.focus).unwrap_or(0);
+        let change = |app: &mut App, by: i32| match app.setup.focus {
+            Setting::Level => {
+                app.setup.level = (app.setup.level as i32 + by).clamp(0, engine::LEVELS.len() as i32 - 1) as usize;
+            }
+            Setting::Colour => {
+                let i = Colour::ALL.iter().position(|&c| c == app.setup.colour).unwrap_or(0) as i32;
+                app.setup.colour = Colour::ALL[(i + by).rem_euclid(Colour::ALL.len() as i32) as usize];
+            }
+            Setting::Time => {
+                let presets = clock::PRESETS.len() as i32;
+                app.clock = Clock::new((app.clock.preset as i32 + by).rem_euclid(presets) as usize);
+            }
+            Setting::Play => {}
+        };
+        match code {
+            KeyCode::Up | KeyCode::Char('k') => self.setup.focus = Setting::ALL[(at + rows - 1) % rows],
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => self.setup.focus = Setting::ALL[(at + 1) % rows],
+            KeyCode::Right | KeyCode::Char('l') => change(self, 1),
+            KeyCode::Left | KeyCode::Char('h') => change(self, -1),
+            KeyCode::Char('t') => {
+                self.setup.focus = Setting::Time;
+                change(self, 1);
+            }
+            KeyCode::Char(c @ '1'..='8') => {
+                self.setup.focus = Setting::Level;
+                self.setup.level = c as usize - '1' as usize;
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => match self.engine {
+                EngineStatus::Ready { .. } => self.begin(now),
+                EngineStatus::Failed(_) => self.open_setup(),
+                _ => {}
+            },
+            KeyCode::Esc => self.screen = Screen::Home,
+            _ => {}
+        }
     }
 
     pub fn tick(&mut self, now: Instant) {
@@ -537,13 +819,17 @@ impl App {
         if self.slide.as_ref().is_some_and(|s| now.saturating_duration_since(s.start) >= SLIDE_TIME) {
             self.slide = None;
         }
+        if self.screen == Screen::Playing && self.ended_at.is_none() && self.result().is_some() {
+            self.ended_at = Some(now);
+        }
         // Not while a piece is being dragged: the board would turn under it.
         if self.flip_at.is_some_and(|at| now >= at) && self.drag.is_none() {
             self.flip_at = None;
-            if self.auto_flip && self.online.is_none() {
+            if self.auto_flip && self.local() {
                 self.flipped = self.to_move() == Side::Black;
             }
         }
+        self.ask_engine(now);
     }
 
     /// `a`: auto flip on or off. Turning it on turns the board at once.
@@ -576,18 +862,22 @@ impl App {
         match self.screen {
             Screen::Home => return self.on_home_key(key.code, now),
             Screen::Lobby => return self.on_lobby_key(key.code),
+            Screen::Setup => return self.on_setup_key(key.code, now),
             // The board shows but waits for the clock; Esc goes back.
             Screen::Countdown { .. } => {
                 match key.code {
                     KeyCode::Esc => self.go_home(now),
                     KeyCode::Char('f') => self.flipped = !self.flipped,
-                    KeyCode::Char('a') if self.online.is_none() => self.toggle_auto_flip(now),
+                    KeyCode::Char('a') if self.local() => self.toggle_auto_flip(now),
                     KeyCode::Char('g') => self.hires = !self.hires,
                     _ => {}
                 }
                 return;
             }
             Screen::Playing => {}
+        }
+        if self.end_popup(now) {
+            return self.on_end_key(key.code, now);
         }
         if let Some(p) = self.promotion {
             self.on_promotion_key(key.code, p, now);
@@ -603,13 +893,16 @@ impl App {
                 self.on_input_key(key.code, now);
             }
             KeyCode::Char('f') => self.flipped = !self.flipped,
-            KeyCode::Char('a') if self.online.is_none() => self.toggle_auto_flip(now),
+            KeyCode::Char('a') if self.local() => self.toggle_auto_flip(now),
             KeyCode::Char('g') => self.hires = !self.hires,
             KeyCode::Char('r') => self.leave(now),
             KeyCode::Char('d') => self.draw(now),
             KeyCode::Char('x') => self.resign(now),
-            // Nobody can pause the other player's clock.
-            KeyCode::Char('p') if self.online.is_none() => self.clock.toggle_pause(now),
+            // Nobody can pause the other player's clock, and the computer's
+            // runs while it thinks.
+            KeyCode::Char('p') if self.online.is_none() && self.my_turn() => self.clock.toggle_pause(now),
+            // Esc brings back a game-over pop-up put away to see the board.
+            KeyCode::Esc if self.end_hidden => self.end_hidden = false,
             KeyCode::Esc => self.selected = None,
             KeyCode::Left | KeyCode::Char('h') => self.step(-1, 0),
             KeyCode::Right | KeyCode::Char('l') => self.step(1, 0),
@@ -638,12 +931,9 @@ impl App {
                 self.screen = Screen::Lobby;
                 self.lobby = Lobby::Choose { pick: Pick::Host };
             }
-            KeyCode::Enter | KeyCode::Char(' ') if self.mode.available() => self.begin(now),
-            KeyCode::Enter | KeyCode::Char(' ') => self.notice = Some(now),
+            KeyCode::Enter | KeyCode::Char(' ') if self.mode == Mode::Computer => self.open_setup(),
+            KeyCode::Enter | KeyCode::Char(' ') => self.begin(now),
             _ => {}
-        }
-        if !matches!(code, KeyCode::Enter | KeyCode::Char(' ')) {
-            self.notice = None;
         }
         self.drawn = None;
     }
@@ -933,7 +1223,7 @@ impl App {
         }
         self.last_move = Some((mv.from, mv.to));
         self.slide = Some(Slide { movers, captured, start: now });
-        if self.auto_flip && self.online.is_none() && !self.over() {
+        if self.auto_flip && self.local() && !self.over() {
             self.flip_at = Some(now + SLIDE_TIME + FLIP_PAUSE);
         }
         self.history.push(MoveRecord { piece, san: before.san(mv), captured: captured.map(|(p, _)| p) });
@@ -1059,12 +1349,21 @@ impl App {
         }
         let (col, row) = (ev.column as i32, ev.row as i32);
         match self.screen {
-            Screen::Home | Screen::Lobby => {
+            Screen::Home | Screen::Lobby | Screen::Setup => {
                 if ev.kind == MouseEventKind::Down(MouseButton::Left) {
                     self.on_home_click(col, row, now);
                 }
             }
             Screen::Countdown { .. } => {}
+            // The pop-up takes the clicks; the board under it does not.
+            Screen::Playing if self.end_popup(now) => {
+                if ev.kind == MouseEventKind::Down(MouseButton::Left)
+                    && let Some(layout) = layout::compute(self.size.0 as i32, self.size.1 as i32)
+                    && let Some(choice) = panel::end_hit(&layout.g, col, row)
+                {
+                    self.end_go(choice, now);
+                }
+            }
             Screen::Playing => self.on_board_mouse(ev.kind, col, row, now),
         }
     }
@@ -1088,7 +1387,14 @@ impl App {
                 self.on_lobby_key(KeyCode::Enter);
             }
             HomeHit::Copy => self.copy_code(),
-            HomeHit::AutoFlip => self.on_home_key(KeyCode::Char('a'), now),
+            HomeHit::Setting(setting, next) => {
+                self.setup.focus = setting;
+                self.on_setup_key(if next { KeyCode::Right } else { KeyCode::Left }, now);
+            }
+            HomeHit::Play => {
+                self.setup.focus = Setting::Play;
+                self.on_setup_key(KeyCode::Enter, now);
+            }
         }
     }
 

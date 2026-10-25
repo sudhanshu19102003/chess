@@ -27,6 +27,16 @@ fn click(app: &mut App, at: &str) {
     press(app, KeyCode::Enter);
 }
 
+/// A game just ended by fool's mate at `t0`.
+fn mated(t0: Instant) -> App {
+    let mut app = game();
+    for uci in ["f2f3", "e7e5", "g2g4", "d8h4"] {
+        assert!(app.play_uci(uci, t0));
+    }
+    app.tick(t0);
+    app
+}
+
 #[test]
 fn only_the_side_to_move_can_pick_up_a_piece() {
     let mut app = game();
@@ -112,12 +122,13 @@ fn the_home_screen_counts_down_then_starts_whites_clock() {
     let t0 = Instant::now();
     let mut app = App::new(t0);
     assert_eq!(app.screen, Screen::Home);
-    // Modes not built yet only show a note.
+    // VS COMPUTER opens its setup first; Esc comes back.
     app.on_key(KeyEvent::from(KeyCode::Up), t0);
     assert_eq!(app.mode, Mode::Computer);
     app.on_key(KeyEvent::from(KeyCode::Enter), t0);
+    assert_eq!(app.screen, Screen::Setup);
+    app.on_key(KeyEvent::from(KeyCode::Esc), t0);
     assert_eq!(app.screen, Screen::Home);
-    assert!(app.notice_showing(t0));
     app.on_key(KeyEvent::from(KeyCode::Down), t0);
     app.on_key(KeyEvent::from(KeyCode::Enter), t0);
     assert_eq!(app.screen, Screen::Countdown { go: t0 + COUNTDOWN });
@@ -200,6 +211,40 @@ fn typed_promotion_and_castling() {
     typed(&mut app, "Kd7");
     typed(&mut app, "O-O");
     assert_eq!(app.history[2].san, "O-O");
+}
+
+#[test]
+fn the_end_of_a_game_offers_a_new_game_or_home() {
+    use chess_tui::app::{END_PAUSE, EndChoice};
+    let t0 = Instant::now();
+    let later = t0 + END_PAUSE;
+    let key = |app: &mut App, code: KeyCode| app.on_key(KeyEvent::from(code), later);
+
+    // The pop-up waits a moment, so the last move is seen landing.
+    let mut app = mated(t0);
+    assert_eq!(app.ended_at, Some(t0));
+    assert!(!app.end_popup(t0));
+    assert!(app.end_popup(later));
+    // Esc puts it away to look at the board, and brings it back.
+    key(&mut app, KeyCode::Esc);
+    assert!(!app.end_popup(later));
+    key(&mut app, KeyCode::Esc);
+    assert!(app.end_popup(later));
+    // NEW GAME comes first: another countdown, same mode, fresh board.
+    assert_eq!(app.end_choice, EndChoice::NewGame);
+    key(&mut app, KeyCode::Enter);
+    assert!(matches!(app.screen, Screen::Countdown { .. }));
+    assert!(app.history.is_empty() && app.ended_at.is_none());
+
+    // HOME is the other button, or `r`.
+    let mut app = mated(t0);
+    key(&mut app, KeyCode::Right);
+    assert_eq!(app.end_choice, EndChoice::Home);
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.screen, Screen::Home);
+    let mut app = mated(t0);
+    key(&mut app, KeyCode::Char('r'));
+    assert_eq!(app.screen, Screen::Home);
 }
 
 mod mouse {
@@ -286,13 +331,34 @@ mod mouse {
     }
 
     #[test]
+    fn the_end_pop_up_buttons_click() {
+        use chess_tui::app::{END_PAUSE, EndChoice};
+        use chess_tui::{layout, panel};
+        let mut app = mated(Instant::now() - END_PAUSE);
+        let g = layout::compute(app.size.0 as i32, app.size.1 as i32).unwrap().g;
+        let cell_of = |choice| {
+            let cells = (0..app.size.1 as i32).flat_map(|row| (0..app.size.0 as i32).map(move |col| (col, row)));
+            cells.into_iter().find(|&(col, row)| panel::end_hit(&g, col, row) == Some(choice)).unwrap()
+        };
+        let (home, new_game) = (cell_of(EndChoice::Home), cell_of(EndChoice::NewGame));
+        assert_eq!(home.1, new_game.1);
+        assert!(home.0 > new_game.0);
+        // A click on the board under the pop-up does nothing.
+        let a1 = cell(&app, "a1");
+        mouse(&mut app, MouseEventKind::Down(MouseButton::Left), a1);
+        assert_eq!(app.screen, Screen::Playing);
+        mouse(&mut app, MouseEventKind::Down(MouseButton::Left), (home.0 as u16, home.1 as u16));
+        assert_eq!(app.screen, Screen::Home);
+    }
+
+    #[test]
     fn home_buttons_click() {
         use chess_tui::app::{Lobby, Mode};
         use chess_tui::panel::{HOME_W, home_origin};
         let mut app = App::new(Instant::now());
         let (x, y) = home_origin(app.size.0 as i32, app.size.1 as i32);
         // The middle of the second button: peer to peer.
-        let at = ((x + HOME_W / 2) as u16, (y + 13) as u16);
+        let at = ((x + HOME_W / 2) as u16, (y + 15) as u16);
         mouse(&mut app, MouseEventKind::Down(MouseButton::Left), at);
         assert_eq!(app.mode, Mode::PeerToPeer);
         assert_eq!(app.screen, Screen::Lobby);
@@ -381,4 +447,90 @@ fn with_auto_flip_a_new_game_starts_from_whites_side() {
     assert_eq!(app.screen, Screen::Home);
     press(&mut app, KeyCode::Enter);
     assert!(!app.flipped);
+}
+
+/// A VS COMPUTER game up to the end of its countdown, the engine ready.
+fn versus(colour_presses: usize) -> (App, Instant) {
+    use chess_tui::app::{COUNTDOWN, Mode};
+    use chess_tui::engine::{Event, Request};
+    let t0 = Instant::now();
+    let mut app = App::new(t0);
+    app.mode = Mode::Computer;
+    app.on_key(KeyEvent::from(KeyCode::Enter), t0);
+    assert_eq!(app.screen, Screen::Setup);
+    assert_eq!(std::mem::take(&mut app.engine_requests), [Request::Prepare]);
+    // Not ready yet: Enter waits.
+    app.on_key(KeyEvent::from(KeyCode::Enter), t0);
+    assert_eq!(app.screen, Screen::Setup);
+    app.on_engine(Event::Progress { got: 10, total: 80 }, t0);
+    app.on_engine(Event::Ready { name: "Stockfish 19".into() }, t0);
+    app.on_key(KeyEvent::from(KeyCode::Char('2')), t0);
+    app.on_key(KeyEvent::from(KeyCode::Down), t0);
+    for _ in 0..colour_presses {
+        app.on_key(KeyEvent::from(KeyCode::Right), t0);
+    }
+    app.on_key(KeyEvent::from(KeyCode::Enter), t0);
+    assert!(matches!(app.screen, Screen::Countdown { .. }));
+    let go = t0 + COUNTDOWN;
+    app.tick(go);
+    (app, go)
+}
+
+#[test]
+fn the_computer_answers_the_players_moves() {
+    use chess_tui::engine::{Event, Request};
+    let (mut app, go) = versus(0);
+    assert_eq!(app.versus.as_ref().unwrap().human, Color::White);
+    assert_eq!(app.versus.as_ref().unwrap().level, 1);
+    assert!(app.engine_requests.is_empty(), "White moves first");
+    assert!(app.play_uci("e2e4", go));
+    // The computer's pieces are not the player's.
+    app.cursor = sq("e7");
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.selected, None);
+    // Asked once the piece has landed.
+    let later = go + std::time::Duration::from_secs(1);
+    app.tick(later);
+    app.tick(later);
+    let think = match std::mem::take(&mut app.engine_requests).as_slice() {
+        [Request::Think(t)] => t.clone(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(think.moves, ["e2e4"]);
+    assert!(think.new_game);
+    // A stale or illegal answer is not played.
+    app.on_engine(Event::Move { id: think.id + 1, uci: "e7e5".into() }, later);
+    assert_eq!(app.history.len(), 1);
+    app.on_engine(Event::Move { id: think.id, uci: "e7e5".into() }, later);
+    assert_eq!(app.history.len(), 2);
+    assert_eq!(app.history[1].san, "e5");
+    assert!(app.play_uci("g1f3", later));
+}
+
+#[test]
+fn playing_black_the_computer_opens_and_the_board_turns() {
+    use chess_tui::engine::{Event, Request};
+    let (mut app, go) = versus(1);
+    assert_eq!(app.versus.as_ref().unwrap().human, Color::Black);
+    assert!(app.flipped);
+    let id = match std::mem::take(&mut app.engine_requests).as_slice() {
+        [Request::Think(t)] => t.id,
+        other => panic!("{other:?}"),
+    };
+    assert!(!app.play_uci("e2e4", go), "not the player's pieces");
+    app.on_engine(Event::Move { id, uci: "d2d4".into() }, go);
+    assert!(app.play_uci("d7d5", go));
+    // Leaving stops the search.
+    app.on_key(KeyEvent::from(KeyCode::Char('r')), go);
+    assert_eq!(app.screen, Screen::Home);
+    assert!(app.engine_requests.contains(&Request::Stop));
+}
+
+#[test]
+fn an_engine_failure_stops_the_game() {
+    use chess_tui::engine::Event;
+    let (mut app, go) = versus(0);
+    app.on_engine(Event::Failed("Stockfish stopped unexpectedly".into()), go);
+    assert!(app.over());
+    assert!(!app.play_uci("e2e4", go));
 }

@@ -1,7 +1,7 @@
 //! Renders the UI headlessly to a PNG, to check the look at any terminal
 //! size without a real terminal. macOS only (uses system fonts).
 //!
-//!     cargo run --release --example snapshot -- <cols> <rows> <out.png> [home|drawn|countdown|start|midgame|captures|check|promotion|mate|lobby|code|connecting|failed|unavailable|online|dropped]
+//!     cargo run --release --example snapshot -- <cols> <rows> <out.png> [home|setup|download|nostockfish|computer|drawn|countdown|start|midgame|captures|check|promotion|mate|lobby|code|connecting|failed|unavailable|online|dropped]
 //!
 //! Set `CHESS_PIXELS=octant` to render the high-resolution pieces.
 
@@ -65,6 +65,38 @@ fn main() {
             app.screen = Screen::Home;
             app.mode = Mode::PeerToPeer;
             app.drawn = Some("their move came 9.6 s later than their clock said; 4.4 s of lag was allowed".into());
+        }
+        "setup" | "download" | "nostockfish" => {
+            use chess_tui::app::EngineStatus;
+            app.screen = Screen::Setup;
+            app.mode = Mode::Computer;
+            app.engine = match scene.as_str() {
+                "setup" => EngineStatus::Ready { name: "Stockfish 19".into() },
+                "download" => EngineStatus::Downloading { got: 34_500_000, total: 82_323_876 },
+                _ => EngineStatus::Failed("download failed: curl: (6) Could not resolve host: github.com".into()),
+            };
+        }
+        "computer" => {
+            // Playing Black against level 4, Stockfish thinking.
+            use chess_tui::{app::EngineStatus, engine};
+            app.screen = Screen::Setup;
+            app.mode = Mode::Computer;
+            app.engine = EngineStatus::Ready { name: "Stockfish 19".into() };
+            app.setup.colour = chess_tui::app::Colour::Black;
+            app.on_key(ratatui::crossterm::event::KeyEvent::from(ratatui::crossterm::event::KeyCode::Enter), t0);
+            now = t0 + chess_tui::app::COUNTDOWN;
+            app.tick(now);
+            for (i, uci) in ["e2e4", "c7c5", "g1f3", "d7d6", "d2d4"].iter().enumerate() {
+                now += Duration::from_secs(4);
+                if i % 2 == 0 {
+                    let id = app.versus.as_ref().and_then(|v| v.asked).expect("asked");
+                    app.on_engine(engine::Event::Move { id, uci: uci.to_string() }, now);
+                } else {
+                    assert!(app.play_uci(uci, now));
+                }
+                app.tick(now + Duration::from_secs(1));
+            }
+            now += Duration::from_secs(2);
         }
         "lobby" => {
             app.screen = Screen::Lobby;
@@ -173,6 +205,15 @@ fn main() {
         "mate" => {
             let moves = ["e2e4", "e7e5", "f1c4", "b8c6", "d1h5", "g8f6", "h5f7"];
             now = play(&mut app, t0, &moves) + Duration::from_secs(3);
+        }
+        "won" | "agreed" => {
+            // The game-over pop-up, with the confetti in mid-fall for a win.
+            let moves = ["e2e4", "e7e5", "f1c4", "b8c6", "d1h5", "g8f6", "h5f7"];
+            let moves = if scene == "won" { &moves[..] } else { &moves[..4] };
+            now = play(&mut app, t0, moves);
+            app.agreed_draw = scene == "agreed";
+            app.tick(now);
+            now += chess_tui::app::END_PAUSE + Duration::from_millis(1600);
         }
         "promotion" => {
             app.game = Game::from_position(Position::from_fen("1n2k3/P7/8/8/8/8/5PPP/4K3 w - - 0 40").unwrap());
