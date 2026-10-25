@@ -118,7 +118,8 @@ Repetition and the 50-move rule end the game automatically.
 characters, such as Ghostty, the pieces are drawn at full resolution. Elsewhere
 they are drawn smaller, by hand, in the same palette. `CHESS_PIXELS=octant|half`
 overrides the detection, and `g` switches in game. Colours are 24-bit when the
-terminal says it supports them (`COLORTERM=truecolor`), otherwise 256-colour;
+terminal says it supports them (`COLORTERM=truecolor`) and always on
+Windows, otherwise 256-colour;
 `CHESS_COLORS=256|truecolor` overrides.
 
 ## Playing online
