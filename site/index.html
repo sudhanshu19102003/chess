@@ -31,13 +31,16 @@
   <p>Install on macOS or Linux (x86_64 or ARM):</p>
   <pre>curl -fsSL https://chess.thesudhanshu.dev/install.sh | sh</pre>
 
+  <p>On Windows 10 or 11 (x86_64 or ARM), in PowerShell:</p>
+  <pre>irm https://chess.thesudhanshu.dev/install.ps1 | iex</pre>
+
   <p>Then run <code>chess-tui</code> in a terminal of about 146 × 50 cells.</p>
 
   <img src="https://raw.githubusercontent.com/sudhanshu19102003/chess/main/docs/screenshot.png" alt="A game in progress">
 
   <ul>
-    <li>The script installs to <code>~/.local/bin</code> without sudo, and refuses any download whose signature or checksum does not match. <a href="install.sh">Read it first</a>.</li>
-    <li>Pin a version: <code>curl -fsSL https://chess.thesudhanshu.dev/install.sh | CHESS_VERSION=v0.1.0 sh</code></li>
+    <li>The scripts install without sudo or administrator rights (to <code>~/.local/bin</code>, or <code>%LOCALAPPDATA%\Programs\chess</code> on Windows, which is added to your PATH), and refuse any download whose signature or checksum does not match. Read them first: <a href="install.sh">install.sh</a>, <a href="install.ps1">install.ps1</a>.</li>
+    <li>Pin a version: <code>curl -fsSL https://chess.thesudhanshu.dev/install.sh | CHESS_VERSION=v0.1.0 sh</code>, or on Windows <code>$env:CHESS_VERSION = 'v0.1.0'</code> before the command.</li>
     <li>Source, releases and the full guide: <a href="https://github.com/sudhanshu19102003/chess">github.com/sudhanshu19102003/chess</a></li>
   </ul>
 </main>
