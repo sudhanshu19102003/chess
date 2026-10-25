@@ -11,6 +11,7 @@ chess-core = { path = "../chess-core" }
 chess-net = { path = "../chess-net" }
 chess-verify = { path = "../chess-verify" }
 ratatui = "0.30.2"
+sha2 = "0.11.1"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "sync"] }
 
 [dev-dependencies]

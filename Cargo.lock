@@ -312,6 +312,7 @@ dependencies = [
  "fontdue",
  "png",
  "ratatui",
+ "sha2 0.11.1",
  "tokio",
 ]
 

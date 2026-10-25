@@ -2,6 +2,7 @@ pub mod app;
 pub mod canvas;
 pub mod clipboard;
 pub mod clock;
+pub mod engine;
 pub mod layout;
 pub mod net;
 pub mod octant;
