@@ -132,9 +132,9 @@ async fn run(options: &Options) -> io::Result<bool> {
                 options.server
             );
             println!("waiting for the other player...");
-            (Role::Host, rendezvous.wait_peer().await?, code)
+            (Role::Host, rendezvous.wait_peer(&code).await?, code)
         }
-        Some((nameplate, code)) => (Role::Join, rendezvous.join(*nameplate).await?, code.clone()),
+        Some((nameplate, code)) => (Role::Join, rendezvous.join(*nameplate, code).await?, code.clone()),
     };
     let nat = rendezvous.nat(&peer);
     let nat_text = match nat {

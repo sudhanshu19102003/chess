@@ -22,6 +22,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tokio::time::{sleep, timeout};
 
+use crate::introduce::introduce;
 use crate::line;
 
 /// How long the client gives the punch before reporting failure.
@@ -65,11 +66,11 @@ impl fmt::Display for Role {
     }
 }
 
-/// The other player, as the server introduced them.
+/// The other player, as they introduced themselves.
 #[derive(Clone, Debug)]
 pub struct Peer {
-    /// Shared by both sides of this pairing only; proves a connection
-    /// reached the right peer.
+    /// Shared by both sides of this pairing only, and unknown to the server;
+    /// proves a connection reached the right peer.
     pub token: String,
     /// This client's own address as the server saw it.
     pub you: SocketAddr,
@@ -241,14 +242,19 @@ impl Rendezvous {
             .ok_or_else(|| line::invalid(format!("unexpected reply: {reply}")))
     }
 
-    /// Waits for someone to join the nameplate from [`host`](Self::host).
-    /// The server gives up after a few minutes.
-    pub async fn wait_peer(&mut self) -> io::Result<Peer> {
-        let reply = self.reply().await?;
-        parse_peer(&reply)
+    /// Waits for someone to join the nameplate from [`host`](Self::host), and
+    /// learns their addresses from them (see [`introduce`](crate::introduce)),
+    /// which only works if they know the words of `code`. The server gives
+    /// up after a few minutes. A wrong code is a
+    /// [`PermissionDenied`](io::ErrorKind::PermissionDenied) error.
+    pub async fn wait_peer(&mut self, code: &str) -> io::Result<Peer> {
+        let you = parse_paired(&self.reply().await?)?;
+        introduce(&mut self.conn, Role::Host, code, you, self.private).await
     }
 
-    pub async fn join(&mut self, nameplate: u16) -> io::Result<Peer> {
+    /// Joins the nameplate in `code` (like `7-comet-pilot`) and learns the
+    /// host's addresses from them, if `code`'s words are right.
+    pub async fn join(&mut self, nameplate: u16, code: &str) -> io::Result<Peer> {
         line::write(
             self.conn.get_mut(),
             &format!("JOIN {nameplate} {}", self.private),
@@ -257,7 +263,8 @@ impl Rendezvous {
         let reply = timeout(SERVER_WAIT, self.reply())
             .await
             .map_err(|_| timed_out("no answer"))??;
-        parse_peer(&reply)
+        let you = parse_paired(&reply)?;
+        introduce(&mut self.conn, Role::Join, code, you, self.private).await
     }
 
     pub fn nat(&self, peer: &Peer) -> Nat {
@@ -487,18 +494,12 @@ async fn probe_nat(bind: SocketAddr, probe: SocketAddr) -> io::Result<SocketAddr
     Ok(seen)
 }
 
-fn parse_peer(reply: &str) -> io::Result<Peer> {
-    let words: Vec<&str> = reply.split(' ').collect();
-    let addr = |s: &str| s.parse().map_err(|_| line::invalid("bad address"));
-    match words[..] {
-        ["PEER", token, you, public, private] => Ok(Peer {
-            token: token.to_string(),
-            you: addr(you)?,
-            public: addr(public)?,
-            private: addr(private)?,
-        }),
-        _ => Err(line::invalid(format!("unexpected reply: {reply}"))),
-    }
+/// `PAIRED <your address as the server sees it>`.
+fn parse_paired(reply: &str) -> io::Result<SocketAddr> {
+    reply
+        .strip_prefix("PAIRED ")
+        .and_then(|a| a.parse().ok())
+        .ok_or_else(|| line::invalid(format!("unexpected reply: {reply}")))
 }
 
 async fn connect_from(bind: SocketAddr, to: SocketAddr) -> io::Result<TcpStream> {

@@ -6,6 +6,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::time::Duration;
 
+use chess_net::code::{WORDS, new_code};
 use chess_net::{
     Limits, Nat, Peer, Rendezvous, Report, Role, Stats, Via, measure_rtt, serve, serve_relay,
     via_relay,
@@ -62,15 +63,16 @@ async fn pair_logged(
     let mut host = Rendezvous::connect(server, probe).await.unwrap();
     let nameplate = host.host().await.unwrap();
     assert_eq!(nameplate, 1);
+    let code = new_code(nameplate);
     let mut joiner = Rendezvous::connect(server, probe).await.unwrap();
     let (host_addr, join_addr) = (host.private_addr(), joiner.private_addr());
 
     let host_side = async {
-        let peer = host.wait_peer().await?;
+        let peer = host.wait_peer(&code).await?;
         play(host, Role::Host, peer, relay).await
     };
     let join_side = async {
-        let peer = joiner.join(nameplate).await?;
+        let peer = joiner.join(nameplate, &code).await?;
         play(joiner, Role::Join, peer, relay).await
     };
     let (host_result, join_result) = tokio::join!(host_side, join_side);
@@ -148,7 +150,7 @@ async fn a_relay_nobody_listens_on_fails_cleanly() {
 async fn unknown_code_is_refused() {
     let (server, probe) = start_server(None).await;
     let mut joiner = Rendezvous::connect(server, probe).await.unwrap();
-    let err = joiner.join(42).await.unwrap_err();
+    let err = joiner.join(42, "42-comet-pilot").await.unwrap_err();
     assert!(err.to_string().contains("unknown code"), "{err}");
 }
 
@@ -157,10 +159,67 @@ async fn codes_are_single_use() {
     let (server, probe) = start_server(None).await;
     let mut host = Rendezvous::connect(server, probe).await.unwrap();
     let nameplate = host.host().await.unwrap();
+    let code = new_code(nameplate);
     let mut first = Rendezvous::connect(server, probe).await.unwrap();
-    first.join(nameplate).await.unwrap();
+    let (waiting, joined) = tokio::join!(host.wait_peer(&code), first.join(nameplate, &code));
+    waiting.unwrap();
+    joined.unwrap();
     let mut second = Rendezvous::connect(server, probe).await.unwrap();
-    assert!(second.join(nameplate).await.is_err());
+    assert!(second.join(nameplate, &code).await.is_err());
+}
+
+/// The server forwards opaque messages and never an address: a stranger who
+/// knows only the nameplate, even one who gets paired, learns nothing, and
+/// the host is told the code did not match.
+#[tokio::test]
+async fn a_joiner_without_the_words_learns_no_address() {
+    let (server, probe) = start_server(None).await;
+    let mut host = Rendezvous::connect(server, probe).await.unwrap();
+    let nameplate = host.host().await.unwrap();
+    let code = new_code(nameplate);
+    let mut stranger = Rendezvous::connect(server, probe).await.unwrap();
+    // Whatever the stranger guesses at the words, it is not the code.
+    let guess = format!("{nameplate}-{}-{}", WORDS[0], WORDS[0]);
+    assert_ne!(guess, code);
+    let (waiting, joined) = tokio::join!(host.wait_peer(&code), stranger.join(nameplate, &guess));
+    for result in [waiting, joined] {
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{err}");
+    }
+}
+
+/// What a stranger's own connection sees, line by line: its own address,
+/// and nothing about the host.
+#[tokio::test]
+async fn the_server_sends_a_joiner_no_address_of_the_host() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let (server, probe) = start_server(None).await;
+    let mut host = Rendezvous::connect(server, probe).await.unwrap();
+    let nameplate = host.host().await.unwrap();
+    let host_addr = host.private_addr();
+    let stream = tokio::net::TcpStream::connect(server).await.unwrap();
+    let mine = stream.local_addr().unwrap();
+    let mut raw = BufReader::new(stream);
+    raw.get_mut().write_all(format!("JOIN {nameplate} {mine}\n").as_bytes()).await.unwrap();
+    let mut line = String::new();
+    raw.read_line(&mut line).await.unwrap();
+    assert_eq!(line, format!("PAIRED {mine}\n"));
+    assert!(!line.contains(&host_addr.port().to_string()));
+    // The host has said nothing, so the server has nothing more to send.
+    line.clear();
+    let more = tokio::time::timeout(Duration::from_millis(300), raw.read_line(&mut line)).await;
+    assert!(more.is_err(), "{line}");
+}
+
+#[tokio::test]
+async fn joins_from_one_address_are_limited() {
+    let (server, probe) = start_server(None).await;
+    let mut last = String::new();
+    for n in 1..=12u16 {
+        let mut joiner = Rendezvous::connect(server, probe).await.unwrap();
+        last = joiner.join(n, &new_code(n)).await.unwrap_err().to_string();
+    }
+    assert!(last.contains("too many tries"), "{last}");
 }
 
 #[tokio::test]

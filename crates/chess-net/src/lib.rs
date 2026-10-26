@@ -5,7 +5,10 @@
 //! one line per pairing so the direct connection rate can be counted
 //! (`chess-rendezvous stats`).
 //!
-//! Getting connected is plain text lines, unauthenticated: the token only
+//! Getting connected is plain text lines. The server only pairs by nameplate
+//! and forwards opaque messages; the players learn each other's addresses
+//! from each other, sealed under a key from the game code ([`introduce`]),
+//! so a stranger who guesses a nameplate learns nothing. The token only
 //! picks the right connection. Milestone 5's [`handshake`] then runs over
 //! that connection and authenticates and encrypts everything after it.
 //! [`connect`] does all of that in one call for the game, and [`link`]
@@ -17,6 +20,7 @@ pub mod code;
 pub mod connect;
 mod frame;
 pub mod handshake;
+pub mod introduce;
 pub mod lan;
 mod line;
 pub mod link;

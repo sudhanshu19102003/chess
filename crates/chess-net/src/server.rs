@@ -1,15 +1,22 @@
-//! The rendezvous server. It pairs a host and a joiner by nameplate, tells
-//! each the other's addresses, collects both reports and logs one line per
+//! The rendezvous server. It pairs a host and a joiner by nameplate, passes
+//! messages between them, collects both reports and logs one line per
 //! pairing. It holds no game logic, and nothing outlives a pairing.
+//!
+//! The server never tells one player the other's address. Anyone who knows
+//! a nameplate can join it, so the addresses go between the players inside
+//! messages the server cannot read, and only once each has shown it knows
+//! the code's words (see [`crate::introduce`]). To the server those messages
+//! are opaque hex.
 //!
 //! One text line at a time, client first unless noted:
 //!
 //! ```text
 //! probe port   server: SEEN <your addr>, then closes
 //! main port    HOST <private addr>
-//!              server: CODE <nameplate>, later PEER <token> <you> <peer public> <peer private>
+//!              server: CODE <nameplate>, later PAIRED <your public addr>
 //!          or  JOIN <nameplate> <private addr>
-//!              server: PEER ... or ERR <reason>
+//!              server: PAIRED <your public addr> or ERR <reason>
+//!   then       MSG <hex>   (a few each way; the server forwards each to the other side)
 //!   then       RESULT key=value ...
 //!              server: BYE
 //! ```
@@ -21,14 +28,15 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::io::{self, Write as _};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tokio::io::BufReader;
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::{sleep, timeout};
 
 use crate::line;
@@ -37,10 +45,20 @@ use crate::line;
 const FIRST_LINE_WAIT: Duration = Duration::from_secs(10);
 /// How long a code waits for the joiner.
 const CODE_TTL: Duration = Duration::from_secs(5 * 60);
-/// How long after the introduction the server waits for each report.
+/// How long a pairing may take, from `PAIRED` to a player's report: the
+/// introduction, the punch and the relay fallback.
+const PAIRED_WAIT: Duration = Duration::from_secs(90);
+/// How long the joiner's side waits for the host's report after its own.
 const REPORT_WAIT: Duration = Duration::from_secs(60);
 /// Most codes waiting at once.
 const MAX_WAITING: usize = 1000;
+/// Messages one player may have forwarded, and the longest one (a `MSG `
+/// line with its hex).
+const MAX_MESSAGES: usize = 4;
+/// `JOIN`s one address may make in a window. Guessing a nameplate costs the
+/// host its code, so scanning is made slow.
+const MAX_JOINS: u32 = 10;
+const JOIN_WINDOW: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy)]
 struct Addrs {
@@ -58,15 +76,23 @@ struct Waiting {
     pair: oneshot::Sender<Pairing>,
 }
 
+/// What a player has to talk to the other one through the server.
+struct Mailbox {
+    to_peer: mpsc::Sender<String>,
+    from_peer: mpsc::Receiver<String>,
+}
+
 /// What the joiner hands the waiting host.
 struct Pairing {
-    token: String,
-    joiner: Addrs,
+    /// The host's end of the two mailboxes.
+    mailbox: Mailbox,
     host_report: oneshot::Sender<Report>,
 }
 
 struct State {
     waiting: Mutex<HashMap<u16, Waiting>>,
+    /// Recent `JOIN`s by address: when the window began and how many.
+    joins: Mutex<HashMap<IpAddr, (Instant, u32)>>,
     next_id: Mutex<u64>,
     log: Option<PathBuf>,
 }
@@ -77,6 +103,7 @@ struct State {
 pub async fn serve(main: TcpListener, probe: TcpListener, log: Option<PathBuf>) -> io::Result<()> {
     let state = Arc::new(State {
         waiting: Mutex::new(HashMap::new()),
+        joins: Mutex::new(HashMap::new()),
         next_id: Mutex::new(0),
         log,
     });
@@ -133,6 +160,9 @@ async fn handle(state: &State, stream: TcpStream, public: SocketAddr) -> io::Res
                 public,
                 private: parse_addr(private)?,
             };
+            if !state.allow_join(public.ip()) {
+                return line::write(conn.get_mut(), "ERR too many tries").await;
+            }
             join(state, conn, nameplate, me).await
         }
         _ => {
@@ -180,15 +210,10 @@ async fn host(state: &State, mut conn: BufReader<TcpStream>, me: Addrs) -> io::R
         }
         return line::write(conn.get_mut(), "ERR code expired").await;
     };
-    let joiner = pairing.joiner;
-    let peer = format!(
-        "PEER {} {} {} {}",
-        pairing.token, me.public, joiner.public, joiner.private
-    );
-    line::write(conn.get_mut(), &peer).await?;
-    if let Ok(Ok(report)) = timeout(REPORT_WAIT, read_report(&mut conn)).await {
+    let (read, mut write) = split(conn);
+    if let Ok(report) = bridge(read, &mut write, me.public, pairing.mailbox).await {
         let _ = pairing.host_report.send(report);
-        line::write(conn.get_mut(), "BYE").await?;
+        line::write(&mut write, "BYE").await?;
     }
     Ok(())
 }
@@ -204,35 +229,89 @@ async fn join(
         return line::write(conn.get_mut(), "ERR unknown code").await;
     };
     let host = waiting.host;
-    let token = random_token();
     let (host_report, host_reported) = oneshot::channel();
+    let (to_host, from_joiner) = mpsc::channel(MAX_MESSAGES);
+    let (to_joiner, from_host) = mpsc::channel(MAX_MESSAGES);
     let pairing = Pairing {
-        token: token.clone(),
-        joiner: me,
+        mailbox: Mailbox { to_peer: to_joiner, from_peer: from_joiner },
         host_report,
     };
     if waiting.pair.send(pairing).is_err() {
         return line::write(conn.get_mut(), "ERR host left").await;
     }
-    let peer = format!(
-        "PEER {token} {} {} {}",
-        me.public, host.public, host.private
-    );
-    line::write(conn.get_mut(), &peer).await?;
-
-    let (mine, theirs) = tokio::join!(
-        timeout(REPORT_WAIT, read_report(&mut conn)),
-        timeout(REPORT_WAIT, host_reported),
-    );
-    let mine = mine.ok().and_then(Result::ok);
-    let theirs = theirs.ok().and_then(Result::ok);
+    let (read, mut write) = split(conn);
+    let mailbox = Mailbox { to_peer: to_host, from_peer: from_host };
+    let mine = bridge(read, &mut write, me.public, mailbox).await.ok();
+    let theirs = timeout(REPORT_WAIT, host_reported).await.ok().and_then(Result::ok);
     state.record(host, me, theirs.as_ref(), mine.as_ref());
-    line::write(conn.get_mut(), "BYE").await
+    line::write(&mut write, "BYE").await
+}
+
+/// The two halves of a connection. Nothing may be buffered yet: a client
+/// sends nothing until it has been told `PAIRED`.
+fn split(conn: BufReader<TcpStream>) -> (OwnedReadHalf, OwnedWriteHalf) {
+    debug_assert!(conn.buffer().is_empty());
+    conn.into_inner().into_split()
+}
+
+/// Tells a player `PAIRED` with its own public address, then passes their
+/// `MSG` lines to the other player and the other's to them until the
+/// player's `RESULT` arrives, which it returns.
+async fn bridge(
+    read: OwnedReadHalf,
+    write: &mut OwnedWriteHalf,
+    public: SocketAddr,
+    mailbox: Mailbox,
+) -> io::Result<Report> {
+    line::write(write, &format!("PAIRED {public}")).await?;
+    // Reading in its own task keeps a half-read line from being lost when
+    // the other branch wins.
+    let (lines_tx, mut lines) = mpsc::channel(4);
+    let reader = tokio::spawn(async move {
+        let mut read = BufReader::new(read);
+        loop {
+            let next = line::expect(&mut read).await;
+            let stop = next.is_err();
+            if lines_tx.send(next).await.is_err() || stop {
+                break;
+            }
+        }
+    });
+    let Mailbox { to_peer, mut from_peer } = mailbox;
+    let work = async {
+        let (mut sent, mut peer_open) = (0, true);
+        loop {
+            tokio::select! {
+                next = lines.recv() => {
+                    let text = next.ok_or_else(|| line::invalid("connection closed"))??;
+                    let Some(hex) = text.strip_prefix("MSG ") else {
+                        return parse_report(&text);
+                    };
+                    if sent == MAX_MESSAGES || !is_hex(hex) {
+                        return Err(line::invalid("bad MSG"));
+                    }
+                    sent += 1;
+                    // If the other side is gone, there is nobody to tell.
+                    let _ = to_peer.send(text).await;
+                }
+                message = from_peer.recv(), if peer_open => match message {
+                    Some(message) => line::write(write, &message).await?,
+                    None => peer_open = false,
+                },
+            }
+        }
+    };
+    let result = timeout(PAIRED_WAIT, work).await.map_err(|_| timed_out())?;
+    reader.abort();
+    result
+}
+
+fn is_hex(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// `RESULT key=value ...`: at most eight pairs of short lower-case words.
-async fn read_report(conn: &mut BufReader<TcpStream>) -> io::Result<Report> {
-    let text = line::expect(conn).await?;
+fn parse_report(text: &str) -> io::Result<Report> {
     let pairs = text
         .strip_prefix("RESULT ")
         .ok_or_else(|| line::invalid("expected RESULT"))?;
@@ -254,6 +333,21 @@ async fn read_report(conn: &mut BufReader<TcpStream>) -> io::Result<Report> {
 }
 
 impl State {
+    /// Counts a `JOIN` from `ip`; false once it has made too many lately.
+    fn allow_join(&self, ip: IpAddr) -> bool {
+        let now = Instant::now();
+        let mut joins = self.joins.lock().unwrap();
+        if joins.len() > 10_000 {
+            joins.retain(|_, (began, _)| now.duration_since(*began) < JOIN_WINDOW);
+        }
+        let entry = joins.entry(ip).or_insert((now, 0));
+        if now.duration_since(entry.0) >= JOIN_WINDOW {
+            *entry = (now, 0);
+        }
+        entry.1 += 1;
+        entry.1 <= MAX_JOINS
+    }
+
     fn record(
         &self,
         host: Addrs,
@@ -416,12 +510,6 @@ impl fmt::Display for Stats {
 
 fn parse_addr(s: &str) -> io::Result<SocketAddr> {
     s.parse().map_err(|_| line::invalid("bad address"))
-}
-
-fn random_token() -> String {
-    let mut bytes = [0u8; 16];
-    getrandom::fill(&mut bytes).expect("no system randomness");
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn timed_out() -> io::Error {

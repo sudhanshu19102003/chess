@@ -2,7 +2,10 @@
 
 Measures how often two players on different networks get a direct TCP
 connection, and falls back to a relay when they don't. Getting connected is
-plain text; then the handshake (milestone 5) runs over the connection and
+plain text lines, but the server never hands anyone the other player's address:
+it pairs by nameplate and forwards opaque messages, and the players exchange
+their addresses sealed under a key from the game code (`src/introduce.rs`),
+so a stranger who guesses a nameplate learns nothing. Then the handshake (milestone 5) runs over the connection and
 everything after it is encrypted. `chess-punch` ends by printing your colour,
 the game id and one message from the other side, sent encrypted.
 

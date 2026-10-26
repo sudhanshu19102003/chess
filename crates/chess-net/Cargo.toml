@@ -5,6 +5,7 @@ edition = "2024"
 license = "GPL-3.0-or-later"
 
 [dependencies]
+chacha20poly1305 = "0.10.1"
 chess-core = { path = "../chess-core" }
 chess-verify = { path = "../chess-verify" }
 ed25519-dalek = "3.0.0"

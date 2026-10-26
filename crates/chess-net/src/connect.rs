@@ -138,9 +138,13 @@ pub async fn connect(
         None => {
             let code = new_code(rendezvous.host().await.map_err(Error::Server)?);
             progress(Stage::Code(code.clone()));
-            (Role::Host, rendezvous.wait_peer().await.map_err(Error::Server)?, code)
+            let peer = rendezvous.wait_peer(&code).await.map_err(introduction_error)?;
+            (Role::Host, peer, code)
         }
-        Some((nameplate, code)) => (Role::Join, rendezvous.join(nameplate).await.map_err(Error::Server)?, code),
+        Some((nameplate, code)) => {
+            let peer = rendezvous.join(nameplate, &code).await.map_err(introduction_error)?;
+            (Role::Join, peer, code)
+        }
     };
     let nat = rendezvous.nat(&peer);
 
@@ -179,6 +183,15 @@ pub async fn connect(
     }
     .map_err(Error::Handshake)?;
     Ok(Linked { established, path: connection.path, rtt })
+}
+
+/// A failed pairing: the other side not knowing the code's words is a wrong
+/// code, anything else the server's or the network's doing.
+fn introduction_error(e: io::Error) -> Error {
+    match e.kind() {
+        io::ErrorKind::PermissionDenied => Error::Handshake(handshake::Error::WrongCode),
+        _ => Error::Server(e),
+    }
 }
 
 /// `name` with `default_port` unless it has a port, resolved to an IPv4
