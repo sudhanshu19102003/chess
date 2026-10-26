@@ -4,13 +4,13 @@
 # --relay, chess-relay (TCP 443), each as a service that starts on boot and
 # restarts on failure.
 #
-#   sudo sh setup.sh [--relay] chess-x86_64-unknown-linux-musl.tar.gz
+#   sudo sh setup.sh [--relay] chess-<target>.tar.gz   (aarch64 or x86_64, to match the machine)
 #
 # The archive is a release archive (scripts/package.sh). Running it again with
 # a newer archive upgrades and restarts the servers. Without --relay, a relay
 # set up by an earlier run is stopped and disabled, so games that cannot
 # connect directly fail instead of falling back to it. deploy/deploy.sh copies
-# the files to a Google Cloud VM and runs this there.
+# the files to a server over ssh and runs this there.
 #
 # Both run as a throwaway unprivileged user (systemd DynamicUser); the relay
 # gets only the right to bind port 443. The rendezvous log of connection
@@ -18,8 +18,10 @@
 #
 #   sudo chess-rendezvous stats /var/lib/chess/results.log
 #
-# The firewall must let TCP 7777 and 7778 in, and 443 for the relay (on Google
-# Cloud, a VPC firewall rule; this script does not touch it).
+# The firewall must let TCP 7777 and 7778 in, and 443 for the relay. This
+# script does not touch it. On Oracle Cloud there are two: the VCN's security
+# list (or network security group) and the instance's own (iptables on
+# Ubuntu images, firewalld on Oracle Linux); both need the ports opened.
 
 set -eu
 

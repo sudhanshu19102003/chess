@@ -39,7 +39,7 @@ pub use server::{Stats, serve};
 /// port up.
 pub const DEFAULT_PORT: u16 = 7777;
 
-/// The public rendezvous server and relay (a Google Cloud VM, set up with
+/// The public rendezvous server (an Oracle Cloud VM, set up with
 /// `deploy/setup.sh`), used unless `--server` or `$CHESS_RENDEZVOUS` says
 /// otherwise.
 pub const DEFAULT_SERVER: &str = "play.chess.thesudhanshu.dev";

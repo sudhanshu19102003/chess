@@ -171,7 +171,7 @@ An online game needs two small servers:
   connect directly. It cannot read or change them.
 
 `chess-tui` uses the public ones at `play.chess.thesudhanshu.dev` (a small
-Google Cloud machine; being set up, not live yet). To use other servers, pass
+Oracle Cloud machine; being set up, not live yet). To use other servers, pass
 `--server HOST[:PORT]` or set `CHESS_RENDEZVOUS`. The relay defaults to the
 same host on port 443; `--relay HOST[:PORT]` or `CHESS_RELAY` if it lives
 elsewhere.
@@ -190,7 +190,8 @@ cargo run --release -p chess-tui                                  # terminal 4: 
 
 Any Linux machine with systemd and a public IPv4 address will do, such as a
 small VPS. Open TCP ports 7777 and 7778 (the NAT probe) in its firewall, and
-443 if it runs the relay. Copy a release archive (or one from
+443 if it runs the relay. On Oracle Cloud, open them in both the VCN security
+list and the instance's own firewall. Copy a release archive (or one from
 `scripts/package.sh`) and `deploy/setup.sh` to it, and run:
 
 ```sh
@@ -203,9 +204,11 @@ privileges, and restart if they fail; running it again with a newer archive
 upgrades them. The relay runs only with `--relay`: a run without it stops
 and disables a relay set up earlier. With no relay, players whose direct
 connection fails cannot play. `sudo chess-rendezvous stats /var/lib/chess/results.log` shows
-how often players connected directly. For a Google Cloud VM,
-`deploy/deploy.sh [--relay] VM_NAME [ZONE]` builds the archive and does all of this
-through `gcloud`. Then point the players at it with `--server`.
+how often players connected directly. From your own machine,
+`deploy/deploy.sh [--relay] [--target TRIPLE] USER@HOST [-i KEY]` builds the
+archive (for ARM by default, such as Oracle Cloud's free Ampere instance; pass
+`--target x86_64-unknown-linux-musl` for an x86 machine) and does all of this
+over `ssh`. Then point the players at it with `--server`.
 
 ### Play between two machines
 
