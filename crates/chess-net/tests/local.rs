@@ -317,3 +317,24 @@ async fn one_address_cannot_hold_many_connections() {
     seventh.read_line(&mut line).await.unwrap();
     assert_eq!(line, "ERR too many connections\n");
 }
+
+/// A flood of NAT probes from one address is cut off; each answer is a
+/// single `SEEN` line, and over the limit the server just closes.
+#[tokio::test]
+async fn nat_probes_from_one_address_are_limited() {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    let (_, probe) = start_server(None).await;
+    let (mut answered, mut refused) = (0, 0);
+    for _ in 0..30 {
+        let mut conn = BufReader::new(tokio::net::TcpStream::connect(probe).await.unwrap());
+        let mut line = String::new();
+        conn.read_line(&mut line).await.unwrap();
+        if line.starts_with("SEEN ") {
+            answered += 1;
+        } else {
+            assert!(line.is_empty(), "{line}");
+            refused += 1;
+        }
+    }
+    assert_eq!((answered, refused), (20, 10));
+}

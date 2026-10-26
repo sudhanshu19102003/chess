@@ -28,10 +28,10 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::io::{self, Write as _};
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tokio::io::BufReader;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
@@ -40,7 +40,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::{sleep, timeout};
 
 use crate::line;
-use crate::per_addr::PerAddr;
+use crate::per_addr::{PerAddr, RateLimit};
 
 /// Time for a new connection to say what it wants.
 const FIRST_LINE_WAIT: Duration = Duration::from_secs(10);
@@ -65,6 +65,9 @@ const MAX_MESSAGES: usize = 4;
 /// host its code, so scanning is made slow.
 const MAX_JOINS: u32 = 10;
 const JOIN_WINDOW: Duration = Duration::from_secs(60);
+/// NAT probes one address may make in a window: one per connect, so this
+/// allows plenty of retries and stops a flood.
+const MAX_PROBES: u32 = 20;
 
 #[derive(Clone, Copy)]
 struct Addrs {
@@ -97,8 +100,8 @@ struct Pairing {
 
 struct State {
     waiting: Mutex<HashMap<u16, Waiting>>,
-    /// Recent `JOIN`s by address: when the window began and how many.
-    joins: Mutex<HashMap<IpAddr, (Instant, u32)>>,
+    joins: RateLimit,
+    probes: Arc<RateLimit>,
     connections: Arc<PerAddr>,
     hosts: Arc<PerAddr>,
     next_id: Mutex<u64>,
@@ -111,16 +114,23 @@ struct State {
 pub async fn serve(main: TcpListener, probe: TcpListener, log: Option<PathBuf>) -> io::Result<()> {
     let state = Arc::new(State {
         waiting: Mutex::new(HashMap::new()),
-        joins: Mutex::new(HashMap::new()),
+        joins: RateLimit::new(MAX_JOINS, JOIN_WINDOW),
+        probes: Arc::new(RateLimit::new(MAX_PROBES, JOIN_WINDOW)),
         connections: PerAddr::new(MAX_CONNECTIONS_PER_ADDR),
         hosts: PerAddr::new(MAX_WAITING_PER_ADDR),
         next_id: Mutex::new(0),
         log,
     });
+    let probes = state.probes.clone();
     tokio::spawn(async move {
         loop {
             match probe.accept().await {
                 Ok((mut stream, addr)) => {
+                    // Over the limit: close without answering. The client
+                    // just learns nothing about its NAT.
+                    if !probes.allow(addr.ip()) {
+                        continue;
+                    }
                     tokio::spawn(async move {
                         let seen = format!("SEEN {addr}");
                         let _ = timeout(FIRST_LINE_WAIT, line::write(&mut stream, &seen)).await;
@@ -178,7 +188,7 @@ async fn handle(state: &State, stream: TcpStream, public: SocketAddr) -> io::Res
                 public,
                 private: parse_addr(private)?,
             };
-            if !state.allow_join(public.ip()) {
+            if !state.joins.allow(public.ip()) {
                 return line::write(conn.get_mut(), "ERR too many tries").await;
             }
             join(state, conn, nameplate, me).await
@@ -351,21 +361,6 @@ fn parse_report(text: &str) -> io::Result<Report> {
 }
 
 impl State {
-    /// Counts a `JOIN` from `ip`; false once it has made too many lately.
-    fn allow_join(&self, ip: IpAddr) -> bool {
-        let now = Instant::now();
-        let mut joins = self.joins.lock().unwrap();
-        if joins.len() > 10_000 {
-            joins.retain(|_, (began, _)| now.duration_since(*began) < JOIN_WINDOW);
-        }
-        let entry = joins.entry(ip).or_insert((now, 0));
-        if now.duration_since(entry.0) >= JOIN_WINDOW {
-            *entry = (now, 0);
-        }
-        entry.1 += 1;
-        entry.1 <= MAX_JOINS
-    }
-
     fn record(
         &self,
         host: Addrs,
