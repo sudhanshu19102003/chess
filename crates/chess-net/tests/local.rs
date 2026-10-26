@@ -272,3 +272,48 @@ async fn a_connection_from_a_stranger_is_not_taken_for_the_peer() {
         .unwrap();
     assert_eq!(err.kind(), io::ErrorKind::TimedOut);
 }
+
+/// One address may keep only a few codes waiting, so it cannot fill the
+/// server's slots.
+#[tokio::test]
+async fn one_address_cannot_hold_many_waiting_codes() {
+    let (server, probe) = start_server(None).await;
+    let mut hosts = Vec::new();
+    for _ in 0..3 {
+        let mut host = Rendezvous::connect(server, probe).await.unwrap();
+        host.host().await.unwrap();
+        hosts.push(host);
+    }
+    let mut fourth = Rendezvous::connect(server, probe).await.unwrap();
+    let err = fourth.host().await.unwrap_err();
+    assert!(err.to_string().contains("too many codes"), "{err}");
+    // A slot comes back when a host leaves.
+    hosts.pop();
+    let mut again = Rendezvous::connect(server, probe).await.unwrap();
+    // The server notices the closed connection a moment later.
+    let mut result = again.host().await;
+    for _ in 0..20 {
+        if result.is_ok() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        again = Rendezvous::connect(server, probe).await.unwrap();
+        result = again.host().await;
+    }
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn one_address_cannot_hold_many_connections() {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    let (server, _) = start_server(None).await;
+    // Idle connections that never say what they want.
+    let mut idle = Vec::new();
+    for _ in 0..6 {
+        idle.push(tokio::net::TcpStream::connect(server).await.unwrap());
+    }
+    let mut seventh = BufReader::new(tokio::net::TcpStream::connect(server).await.unwrap());
+    let mut line = String::new();
+    seventh.read_line(&mut line).await.unwrap();
+    assert_eq!(line, "ERR too many connections\n");
+}

@@ -40,6 +40,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::{sleep, timeout};
 
 use crate::line;
+use crate::per_addr::PerAddr;
 
 /// Time for a new connection to say what it wants.
 const FIRST_LINE_WAIT: Duration = Duration::from_secs(10);
@@ -51,7 +52,12 @@ const PAIRED_WAIT: Duration = Duration::from_secs(90);
 /// How long the joiner's side waits for the host's report after its own.
 const REPORT_WAIT: Duration = Duration::from_secs(60);
 /// Most codes waiting at once.
-const MAX_WAITING: usize = 1000;
+const MAX_WAITING: usize = 100;
+/// What one address may hold: open connections, and codes waiting. A host
+/// needs one of each, so a few at once is plenty for one person or one
+/// household behind a shared address.
+const MAX_CONNECTIONS_PER_ADDR: usize = 6;
+const MAX_WAITING_PER_ADDR: usize = 3;
 /// Messages one player may have forwarded, and the longest one (a `MSG `
 /// line with its hex).
 const MAX_MESSAGES: usize = 4;
@@ -93,6 +99,8 @@ struct State {
     waiting: Mutex<HashMap<u16, Waiting>>,
     /// Recent `JOIN`s by address: when the window began and how many.
     joins: Mutex<HashMap<IpAddr, (Instant, u32)>>,
+    connections: Arc<PerAddr>,
+    hosts: Arc<PerAddr>,
     next_id: Mutex<u64>,
     log: Option<PathBuf>,
 }
@@ -104,6 +112,8 @@ pub async fn serve(main: TcpListener, probe: TcpListener, log: Option<PathBuf>) 
     let state = Arc::new(State {
         waiting: Mutex::new(HashMap::new()),
         joins: Mutex::new(HashMap::new()),
+        connections: PerAddr::new(MAX_CONNECTIONS_PER_ADDR),
+        hosts: PerAddr::new(MAX_WAITING_PER_ADDR),
         next_id: Mutex::new(0),
         log,
     });
@@ -131,6 +141,11 @@ pub async fn serve(main: TcpListener, probe: TcpListener, log: Option<PathBuf>) 
         };
         let state = state.clone();
         tokio::spawn(async move {
+            let Some(_slot) = state.connections.take(addr.ip()) else {
+                let mut stream = stream;
+                let _ = timeout(FIRST_LINE_WAIT, line::write(&mut stream, "ERR too many connections")).await;
+                return;
+            };
             if let Err(e) = handle(&state, stream, addr).await {
                 eprintln!("{addr}: {e}");
             }
@@ -149,6 +164,9 @@ async fn handle(state: &State, stream: TcpStream, public: SocketAddr) -> io::Res
             let me = Addrs {
                 public,
                 private: parse_addr(private)?,
+            };
+            let Some(_slot) = state.hosts.take(public.ip()) else {
+                return line::write(conn.get_mut(), "ERR too many codes").await;
             };
             host(state, conn, me).await
         }

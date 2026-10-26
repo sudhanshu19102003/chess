@@ -25,6 +25,7 @@ use tokio::sync::oneshot;
 use tokio::time::{sleep, timeout};
 
 use crate::line;
+use crate::per_addr::{PerAddr, Slot};
 
 /// Default relay port: 443 gets through most firewalls that allow web
 /// traffic.
@@ -43,6 +44,9 @@ pub struct Limits {
     pub max_bytes: u64,
     /// Most sessions waiting or running at once.
     pub max_sessions: usize,
+    /// Most connections one address may have open at once, waiting or
+    /// forwarding.
+    pub max_per_addr: usize,
 }
 
 impl Default for Limits {
@@ -52,7 +56,8 @@ impl Default for Limits {
             idle: Duration::from_secs(30 * 60),
             lifetime: Duration::from_secs(6 * 60 * 60),
             max_bytes: 1 << 20,
-            max_sessions: 1000,
+            max_sessions: 100,
+            max_per_addr: 6,
         }
     }
 }
@@ -61,7 +66,7 @@ const FIRST_LINE_WAIT: Duration = Duration::from_secs(10);
 
 struct Waiting {
     id: u64,
-    partner: oneshot::Sender<TcpStream>,
+    partner: oneshot::Sender<(TcpStream, Slot)>,
 }
 
 struct State {
@@ -69,6 +74,7 @@ struct State {
     next_id: Mutex<u64>,
     /// Sessions waiting for their second side or forwarding.
     sessions: Mutex<usize>,
+    connections: Arc<PerAddr>,
     limits: Limits,
 }
 
@@ -78,6 +84,7 @@ pub async fn serve_relay(listener: TcpListener, limits: Limits) -> io::Result<()
         waiting: Mutex::new(HashMap::new()),
         next_id: Mutex::new(0),
         sessions: Mutex::new(0),
+        connections: PerAddr::new(limits.max_per_addr),
         limits,
     });
     loop {
@@ -91,14 +98,22 @@ pub async fn serve_relay(listener: TcpListener, limits: Limits) -> io::Result<()
         };
         let state = state.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle(&state, stream).await {
+            let Some(slot) = state.connections.take(addr.ip()) else {
+                let mut stream = stream;
+                let _ = timeout(FIRST_LINE_WAIT, line::write(&mut stream, "ERR too many connections")).await;
+                return;
+            };
+            if let Err(e) = handle(&state, stream, slot).await {
                 eprintln!("{addr}: {e}");
             }
         });
     }
 }
 
-async fn handle(state: &State, stream: TcpStream) -> io::Result<()> {
+/// `slot` is this connection's place in the per-address count; the second
+/// side of a session hands it to the first side's task, which keeps both for
+/// as long as the session runs.
+async fn handle(state: &State, stream: TcpStream, slot: Slot) -> io::Result<()> {
     let mut conn = BufReader::new(stream);
     let first = timeout(FIRST_LINE_WAIT, line::expect(&mut conn))
         .await
@@ -118,17 +133,17 @@ async fn handle(state: &State, stream: TcpStream) -> io::Result<()> {
     match waiting {
         Some(first) => {
             // The first side's task does the forwarding.
-            if let Err(stream) = first.partner.send(stream) {
+            if let Err((stream, _)) = first.partner.send((stream, slot)) {
                 let mut stream = stream;
                 line::write(&mut stream, "ERR peer left").await?;
             }
             Ok(())
         }
-        None => wait_and_forward(state, token.to_string(), stream).await,
+        None => wait_and_forward(state, token.to_string(), stream, slot).await,
     }
 }
 
-async fn wait_and_forward(state: &State, token: String, mut stream: TcpStream) -> io::Result<()> {
+async fn wait_and_forward(state: &State, token: String, mut stream: TcpStream, _slot: Slot) -> io::Result<()> {
     let Some(_session) = Session::open(state) else {
         return line::write(&mut stream, "ERR relay busy").await;
     };
@@ -152,7 +167,7 @@ async fn wait_and_forward(state: &State, token: String, mut stream: TcpStream) -
         _ = sleep(state.limits.wait) => None,
         _ = stream.read(&mut probe) => None,
     };
-    let Some(mut second) = second else {
+    let Some((mut second, _second_slot)) = second else {
         {
             let mut waiting = state.waiting.lock().unwrap();
             if waiting.get(&token).is_some_and(|w| w.id == id) {

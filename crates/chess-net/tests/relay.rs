@@ -150,3 +150,15 @@ async fn the_session_limit_turns_new_sessions_away() {
     let (_, reply) = open(relay, "ffffffffffffffffffffffffffffffff").await;
     assert_eq!(reply, "ERR relay busy");
 }
+
+#[tokio::test]
+async fn one_address_cannot_hold_many_connections() {
+    let relay = start(Limits {
+        max_per_addr: 2,
+        ..Limits::default()
+    })
+    .await;
+    let (_a, _b) = open_pair(relay).await;
+    let (_, reply) = open(relay, "ffffffffffffffffffffffffffffffff").await;
+    assert_eq!(reply, "ERR too many connections");
+}
