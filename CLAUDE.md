@@ -1,4 +1,4 @@
-# P2P Terminal Chess
+# chess-tui
 
 A two-player terminal chess game written in Rust. Players connect directly (peer to peer), both clients validate every move, and a small server only introduces them. Hobby project, no deadlines.
 

@@ -1,4 +1,4 @@
-# Terminal Chess
+# chess-tui
 
 Two-player chess in the terminal, peer to peer. Both players' programs check
 every move themselves; a small server only introduces them and never sees the
