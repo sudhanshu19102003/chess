@@ -1,6 +1,6 @@
 # chess-tui
 
-A two-player terminal chess game written in Rust. Players connect directly (peer to peer), both clients validate every move, and a small server only introduces them. Hobby project, no deadlines.
+A terminal chess game written in Rust. Players connect directly (peer to peer), both clients validate every move, and a small server only introduces them. Hobby project, no deadlines.
 
 Full design discussion (comments, diagram): https://claude.ai/artifact/2rTzNKjZThNAwaksKZN7xc. This file is the canonical summary for agents working in the repo. If the two disagree, ask the user. `README.md` is the player-facing guide (install, setup for online play, keys, fair-play rules, credits); keep it in step when behaviour, keys, flags or the install plan change.
 
