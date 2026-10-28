@@ -7,9 +7,10 @@ game. Written in Rust, with pixel-art pieces, chess clocks and a retro look.
 ![A game in progress](docs/screenshot.png)
 
 > **Status:** a hobby project; v0.1.0 is out. Offline play is complete.
-> Online play is built and tested on one machine, but has not yet been played
-> between two machines on different networks, and there is no public server
-> yet (see [Playing online](#playing-online)).
+> Online play works out of the box: the public server at
+> `play.chess.thesudhanshu.dev` is live (see
+> [Playing online](#playing-online)). It runs no relay, so a game whose direct
+> connection fails cannot be played until you point both sides at one.
 
 ## Contents
 
@@ -70,8 +71,8 @@ $env:CHESS_VERSION = 'v0.1.0'; irm https://chess.thesudhanshu.dev/install.ps1 | 
 ```
 
 Each release archive also holds `chess-rendezvous` and `chess-relay`, for
-running your own servers. Still to come: public servers built in as the
-default, so online play works with no setup; later maybe a Homebrew tap.
+running your own servers. The public server is built in as the default, so
+online play needs no setup. Maybe later: a Homebrew tap.
 
 **Making a release** (maintainers): set the `chess-tui` version in its
 `Cargo.toml`, then push a matching tag (`git tag v0.1.0 && git push origin
@@ -170,8 +171,10 @@ An online game needs two small servers:
 - **`chess-relay`** passes encrypted bytes between the players when they can't
   connect directly. It cannot read or change them.
 
-`chess-tui` uses the public ones at `play.chess.thesudhanshu.dev` (a small
-Oracle Cloud machine; being set up, not live yet). To use other servers, pass
+`chess-tui` uses the public server at `play.chess.thesudhanshu.dev` (a small
+Oracle Cloud machine, live now) by default, so there is nothing to set up. It
+runs `chess-rendezvous` only, not the relay, so players whose direct
+connection fails cannot connect through it. To use other servers, pass
 `--server HOST[:PORT]` or set `CHESS_RENDEZVOUS`. The relay defaults to the
 same host on port 443; `--relay HOST[:PORT]` or `CHESS_RELAY` if it lives
 elsewhere.
@@ -219,7 +222,7 @@ over `ssh`. Then point the players at it with `--server`.
 2. **Join:** choose PEER TO PEER → JOIN WITH A CODE and type the code.
 
 3. The programs try to connect directly for up to 20 seconds, then fall back
-   to the relay. Colours are decided by a fair coin flip that neither side can
+   to a relay if the server runs one (the public server does not). Colours are decided by a fair coin flip that neither side can
    steer. On macOS, allow incoming connections if the firewall asks.
 
 If the direct connection keeps failing, `--force-relay` on both sides skips
